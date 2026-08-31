@@ -35,7 +35,7 @@ const abilityGroups = groupBy(abilityComps, 'category')
       @dblclick="store.ui.selectedNodeId ? null : null"
     >
       <div class="t-head">
-        <span>{{ t.icon }}</span>
+        <span class="t-ico" :style="{ background: t.color + '33', color: t.color }">{{ t.icon }}</span>
         <span>{{ t.label }}</span>
       </div>
       <div class="t-desc">{{ t.describe }}</div>

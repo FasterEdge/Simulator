@@ -45,7 +45,13 @@ function clearLogs() {
       </div>
     </div>
     <div v-if="logs.length === 0" class="empty">还没有命令日志。选中节点 → 挂载组件 → 执行命令。</div>
-    <div v-for="(l, i) in logs" :key="l.ts + '-' + i" class="log-line" :title="JSON.stringify(l, null, 2)">
+    <div
+      v-for="(l, i) in logs"
+      :key="l.ts + '-' + i"
+      class="log-line"
+      :class="{ 'has-err': l.err }"
+      :title="JSON.stringify(l, null, 2)"
+    >
       <span class="t">{{ timeStr(l.ts) }}</span>
       <span class="who">{{ l.nodeName }}</span>
       <span class="act">{{ l.component }}.{{ l.act }}</span>

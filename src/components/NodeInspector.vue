@@ -74,7 +74,10 @@ function onAdd() {
 
       <!-- 挂载组件 -->
       <div class="section">
-        <div class="section-title">挂载组件（{{ Object.keys(node.data).length + Object.keys(node.abilities).length }}）</div>
+        <div class="section-title">
+          挂载组件
+          <span class="count">{{ Object.keys(node.data).length + Object.keys(node.abilities).length }} 个</span>
+        </div>
 
         <div style="display: flex; gap: 6px; margin-bottom: 8px">
           <select class="select" v-model="addSel">
@@ -89,8 +92,16 @@ function onAdd() {
         </div>
 
         <!-- Data 组件 -->
-        <div class="section-title" style="font-size: 11px; color: var(--accent-2)">Data（根）</div>
-        <div v-for="name in Object.keys(node.data)" :key="'d' + name" class="comp-card">
+        <div class="section-title" style="font-size: 11px; color: var(--accent-2); letter-spacing: 0.04em">
+          🌿 Data（根）
+          <span class="count">{{ Object.keys(node.data).length }}</span>
+        </div>
+        <div
+          v-for="name in Object.keys(node.data)"
+          :key="'d' + name"
+          class="comp-card"
+          :class="{ open: store.ui.selectedComponent === name }"
+        >
           <div class="head" @click="selectComponent(name)">
             <span class="kind cmp-chip data">D</span>
             <span class="name">{{ name }}</span>
@@ -99,6 +110,7 @@ function onAdd() {
               style="color: var(--danger)"
               @click.stop="removeComponentFromNode(name)"
             >卸载</span>
+            <span class="chev">▶</span>
           </div>
           <div v-if="store.ui.selectedComponent === name" class="body">
             <ComponentPanel :node-id="node.id" :component="name" kind="data" />
@@ -106,8 +118,16 @@ function onAdd() {
         </div>
 
         <!-- Ability 组件 -->
-        <div class="section-title" style="font-size: 11px; color: var(--accent)">Ability（枝干）</div>
-        <div v-for="name in Object.keys(node.abilities)" :key="'a' + name" class="comp-card">
+        <div class="section-title" style="font-size: 11px; color: var(--accent); letter-spacing: 0.04em">
+          🌱 Ability（枝干）
+          <span class="count">{{ Object.keys(node.abilities).length }}</span>
+        </div>
+        <div
+          v-for="name in Object.keys(node.abilities)"
+          :key="'a' + name"
+          class="comp-card"
+          :class="{ open: store.ui.selectedComponent === name }"
+        >
           <div class="head" @click="selectComponent(name)">
             <span class="kind cmp-chip ability">A</span>
             <span class="name">{{ name }}</span>
@@ -116,6 +136,7 @@ function onAdd() {
               style="color: var(--danger)"
               @click.stop="removeComponentFromNode(name)"
             >卸载</span>
+            <span class="chev">▶</span>
           </div>
           <div v-if="store.ui.selectedComponent === name" class="body">
             <ComponentPanel :node-id="node.id" :component="name" kind="ability" />
@@ -123,8 +144,12 @@ function onAdd() {
         </div>
       </div>
     </template>
-    <div v-else class="empty">
-      从左侧拖入节点模板到画布<br />点击节点即可在此配置其 Data / Ability 并执行命令
+    <div v-else class="empty" style="padding-top: 40px">
+      <div style="font-size: 30px; margin-bottom: 10px">🖱️</div>
+      <div style="font-weight: 600; color: var(--text); margin-bottom: 6px">还没有选中节点</div>
+      <div style="font-size: 12px; line-height: 1.8">
+        从左侧 <b style="color: var(--accent)">拖入节点模板</b> 到画布，或点击画布中的节点<br />即可在此配置它的 <b style="color: var(--accent-2)">Data</b> / <b style="color: var(--accent)">Ability</b> 并执行命令
+      </div>
     </div>
   </div>
 </template>

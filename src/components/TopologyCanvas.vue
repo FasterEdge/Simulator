@@ -101,7 +101,7 @@ function handleDrop(e) {
       />
     </VueFlow>
     <div v-if="store.ui.view === 'inspector' && store.ui.selectedNodeId" class="canvas-hint">
-      选中节点：{{ store.world.nodes.find((n) => n.id === store.ui.selectedNodeId)?.name }} —— 在右侧面板配置 Data / Ability / 命令
+      选中：{{ store.world.nodes.find((n) => n.id === store.ui.selectedNodeId)?.name }} · 在右侧面板配置 Data / Ability / 命令
     </div>
   </div>
 </template>

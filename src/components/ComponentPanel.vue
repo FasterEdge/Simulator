@@ -85,17 +85,21 @@ function stateJson() {
     </div>
 
     <!-- 状态预览 -->
-    <details style="margin-bottom: 8px" open>
-      <summary style="cursor: pointer; font-size: 11px; color: var(--text-dim)">📦 组件状态</summary>
-      <pre style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-family: var(--mono); font-size: 11px; max-height: 180px; overflow: auto; margin-top: 6px">{{ stateJson() }}</pre>
+    <details class="state-box" open>
+      <summary>📦 组件状态</summary>
+      <pre>{{ stateJson() }}</pre>
     </details>
 
     <!-- 命令列表 -->
-    <div class="section-title" style="margin-bottom: 6px">⚡ 命令（{{ commands.length }}）</div>
-    <div v-for="cmd in commands" :key="cmd.name" class="cmd-item">
+    <div class="section-title" style="margin-bottom: 6px">
+      ⚡ 命令
+      <span class="count">{{ commands.length }}</span>
+    </div>
+    <div v-for="cmd in commands" :key="cmd.name" class="cmd-item" :class="{ open: activeCmd && activeCmd.name === cmd.name }">
       <div class="cmd-head" @click="openCmd(cmd)">
         <span class="cmd-name">{{ cmd.name }}</span>
         <span class="cmd-desc" :title="cmd.describe">{{ cmd.describe }}</span>
+        <span class="cmd-chev">▶</span>
       </div>
       <div v-if="activeCmd && activeCmd.name === cmd.name" class="cmd-body">
         <ArgInput v-for="a in cmd.args" :key="a.key" :arg-def="a" v-model="argValues[a.key]" />

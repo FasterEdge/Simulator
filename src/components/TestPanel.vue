@@ -54,8 +54,8 @@ function commandsFor(comp) {
           <button class="btn sm" @click="loadSampleScenarios">示例场景</button>
         </div>
       </div>
-      <div class="empty" style="padding: 8px">
-        编写命令步骤 → 运行 → 按断言判定 PASS / FAIL。全程离线模拟，无后端。
+      <div class="empty" style="padding: 8px; font-size: 11px">
+        编写命令步骤 → 运行 → 按断言判定 <b style="color: var(--accent-2)">PASS</b> / <b style="color: var(--danger)">FAIL</b>。全程离线模拟，无后端。
       </div>
     </div>
 
