@@ -1,7 +1,7 @@
 {
   "name": "fasteredge-simulator",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.20260901",
   "type": "module",
   "description": "FasterEdge 纯前端离线模拟编排与测试工具（拓扑拖拽 + Ability/Data 组件 + 命令控制台）",
   "scripts": {
