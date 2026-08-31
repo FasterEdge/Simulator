@@ -1,5 +1,6 @@
 <div align="center">
-  <h2>🌳 FasterEdge Simulator</h2>
+  <img src="https://avatars.githubusercontent.com/u/245985800?s=200&v=4" alt="logo" width="100" />
+  <h2>FasterEdge Simulator</h2>
   <h3>纯前端、零后端的 FasterEdge 离线模拟编排与测试工具</h3>
 </div>
 
