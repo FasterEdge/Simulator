@@ -130,5 +130,27 @@ check('挂载 NetMapAbility 成功', !!n2.abilities.NetMapAbility)
 out = await runCommand(w2, n2.id, 'NetMapAbility', 'register_peer', { Name: 'a', Address: '10.1.1.1:1' })
 check('自定义节点 NetMap 命令成功', !out.Err, JSON.stringify(out))
 
+// 13. attachComponent 递归补齐 Ability 依赖（CloudRoleAbility 依赖 RoleAbility）
+attachComponent(w2, n2.id, 'CloudRoleAbility')
+check('自动补齐 RoleAbility 依赖', !!n2.abilities.RoleAbility && !!n2.abilities.CloudRoleAbility)
+
+// 14. 序列化→反序列化 往返后 MQTT Broker 订阅仍生效（跨节点路由）
+const { serializeWorld, hydrateWorld } = await import('./src/core/persistence.js')
+const w3 = buildExampleWorld()
+const e31 = w3.nodes.find((n) => n.name === 'edge-01')
+const e32 = w3.nodes.find((n) => n.name === 'edge-02')
+await runCommand(w3, e32.id, 'MQTTAbility', 'subscribe', { Topic: 'edge/+/status' })
+await runCommand(w3, e32.id, 'MQTTAbility', 'connect', {})
+const restored = hydrateWorld(serializeWorld(w3))
+const re32 = restored.nodes.find((n) => n.name === 'edge-02')
+await runCommand(restored, re32.id, 'MQTTAbility', 'connect', {}) // 保持 connected 状态
+out = await runCommand(restored, e31.name === 'edge-01' ? restored.nodes.find((n) => n.name === 'edge-01').id : '', 'MQTTAbility', 'publish', { Topic: 'edge/01/status', Payload: 'hello-after-hydrate' })
+check('hydrate 后 MQTT 跨节点路由恢复', !out.Err && out.Value.delivered >= 1, JSON.stringify(out).slice(0, 200))
+
+// 15. bool 参数引擎层正确解析字符串 'false'
+const edgeForBool = w.nodes.find((n) => n.name === 'edge-01')
+out = await runCommand(w, edgeForBool.id, 'EdgeRoleAbility', 'set_online', { Online: 'false' })
+check("bool 参数 'false' 解析为 false", !out.Err && out.Value === false, JSON.stringify(out))
+
 console.log('\n' + (failures === 0 ? '🎉 全部通过' : `❌ ${failures} 个失败`))
 process.exit(failures === 0 ? 0 : 1)

@@ -53,6 +53,17 @@ export function hydrateWorld(obj) {
   world.links = (obj?.links || []).map((l) => ({ id: l.id, source: l.source, target: l.target }))
   world.scenarios = obj?.scenarios || []
   world.logs = (obj?.logs || []).map((l) => ({ ts: l.ts || 0, ...l })).slice(-2000)
+  // 重建世界 Broker：连接会话与订阅（跨节点 MQTT 路由依赖它）
+  world.broker.clear()
+  for (const n of world.nodes) {
+    const mqtt = n.abilities?.MQTTAbility
+    if (mqtt) {
+      if (mqtt.connected) world.broker.connect(n.id, mqtt.broker, mqtt.clientId)
+      if (Array.isArray(mqtt.subscriptions) && mqtt.subscriptions.length) {
+        world.broker.subs[n.id] = mqtt.subscriptions.map((s) => ({ topic: s.topic, qos: s.qos }))
+      }
+    }
+  }
   return world
 }
 

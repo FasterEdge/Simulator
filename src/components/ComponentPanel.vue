@@ -52,7 +52,7 @@ async function run() {
       break
     }
     if (a.type === 'number' && v !== undefined && v !== '') v = Number(v)
-    if (a.type === 'bool') v = !!v
+    if (a.type === 'bool') v = v === true || v === 'true' || v === 1 || v === '1'
     args[a.key] = v
   }
   if (!valid) return

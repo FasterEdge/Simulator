@@ -1,13 +1,14 @@
 import { ok, fail, invalid } from '../errors.js'
 import { randomHex } from '../crypto.js'
 
+// 与 package.json 保持一致（Vite 构建时可被替换，运行时读不到 json，这里显式维护）
+const VERSION = '1.0.20260901'
+
 const LOGO = `
  _______ _______ _______ _______ _______  ______ _______ ______   ______ _______
  |______ |_____| |______    |    |______ |_____/ |______ |     \\ |  ____ |______
  |       |     | ______|    |    |______ |    \\_ |______ |_____/ |_____| |______
 `
-
-const VERSION = '1.0.20260831'
 
 // ============================================================
 // BaseData
@@ -286,6 +287,7 @@ const dbCommands = (shape) => ({
       }
       if (shape.validate && !shape.validate(cfg)) return fail(invalid('invalid config'))
       s.config = cfg
+      s.configured = true
       s.revision++
       return ok({ version: '1', config: JSON.parse(JSON.stringify(s.config)) })
     },

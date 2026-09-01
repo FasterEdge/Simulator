@@ -137,14 +137,20 @@ export function attachComponent(world, nodeId, compName) {
   if (!def) return { err: `component "${compName}" not registered` }
   const target = def.kind === 'ability' ? node.abilities : node.data
   if (target[compName] !== undefined) return { err: 'duplicate component' }
-  // 自动补齐缺失依赖（data）
-  for (const dep of def.deps || []) {
-    const depDef = ALL[dep]
-    if (depDef && depDef.kind === 'data' && node.data[dep] === undefined) {
-      node.data[dep] = createState(depDef)
-    }
+  // 自动补齐缺失依赖（Data 与 Ability 都补，递归处理，带环检测）
+  const visiting = new Set()
+  const autoAttach = (name) => {
+    const d = ALL[name]
+    if (!d) return
+    const dest = d.kind === 'ability' ? node.abilities : node.data
+    if (dest[name] !== undefined) return
+    if (visiting.has(name)) return // 循环依赖保护
+    visiting.add(name)
+    for (const dep of d.deps || []) autoAttach(dep)
+    visiting.delete(name)
+    dest[name] = createState(d)
   }
-  target[compName] = createState(def)
+  autoAttach(compName)
   return { ok: true, def }
 }
 
