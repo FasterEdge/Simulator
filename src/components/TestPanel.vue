@@ -1,4 +1,9 @@
 <script setup>
+// ─────────────────────────────────────────────────────────────
+// FasterEdge 开源项目
+// Github: https://github.com/FasterEdge
+// Gitee:  https://gitee.com/FasterEdge
+// ─────────────────────────────────────────────────────────────
 import { ref, computed } from 'vue'
 import { store, runScenarioOnWorld, addScenario, removeScenario, loadSampleScenarios } from '../store.js'
 import { ALL } from '../core/registry/index.js'

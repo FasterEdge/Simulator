@@ -1,3 +1,8 @@
+// ─────────────────────────────────────────────────────────────
+// FasterEdge 开源项目
+// Github: https://github.com/FasterEdge
+// Gitee:  https://gitee.com/FasterEdge
+// ─────────────────────────────────────────────────────────────
 import { runCommand } from './engine.js'
 
 // 离线测试场景：steps 按顺序执行，基于 CommandOutput 断言
