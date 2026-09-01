@@ -1,9 +1,19 @@
 {
   "name": "fasteredge-simulator",
-  "private": true,
   "version": "1.0.20260901",
-  "type": "module",
   "description": "FasterEdge 纯前端离线模拟编排与测试工具（拓扑拖拽 + Ability/Data 组件 + 命令控制台）",
+  "author": "FasterEdge <fasteredge@mutantcat.org>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FasterEdge/Simulator.git"
+  },
+  "homepage": "https://github.com/FasterEdge/Simulator",
+  "bugs": {
+    "url": "https://github.com/FasterEdge/Simulator/issues",
+    "email": "fasteredge@mutantcat.org"
+  },
+  "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
