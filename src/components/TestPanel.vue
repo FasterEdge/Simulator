@@ -155,7 +155,7 @@ function commandsFor(comp) {
             <span class="badge" :class="r.pass ? 'pass' : r.skip ? 'skip' : 'fail'">
               {{ r.pass ? 'PASS' : r.skip ? 'SKIP' : 'FAIL' }}
             </span>
-            <b>{{ r.step.name || r.step.component + '.' + r.step.command }}</b>
+            <b>{{ r.step.name || [r.step.component, r.step.command].filter(Boolean).join('.') || '（未命名步骤）' }}</b>
           </div>
           <div v-if="r.reason" style="color: var(--danger); font-size: 11px; margin-top: 2px">{{ r.reason }}</div>
           <pre

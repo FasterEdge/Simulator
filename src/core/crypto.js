@@ -63,3 +63,10 @@ export async function hmacSignBase64Url(keyBytes, payload) {
   const b64 = bytesToBase64(sig)
   return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
+
+// SHA-256 十六进制摘要（用于密钥指纹，不回显明文）
+export async function sha256Hex(payload) {
+  const data = strToBytes(payload)
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return bytesToHex(new Uint8Array(digest))
+}

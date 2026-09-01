@@ -32,7 +32,6 @@ const abilityGroups = groupBy(abilityComps, 'category')
       class="template-card"
       draggable="true"
       @dragstart="onDragStart($event, t)"
-      @dblclick="store.ui.selectedNodeId ? null : null"
     >
       <div class="t-head">
         <span class="t-ico" :style="{ background: t.color + '33', color: t.color }">{{ t.icon }}</span>

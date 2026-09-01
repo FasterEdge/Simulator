@@ -15,6 +15,13 @@ const val = computed({
 function onInput(e) {
   val.value = e.target.value
 }
+
+function onSelect(e) {
+  // select 的 e.target.value 恒为字符串；选项为数字时恢复为数字（如 QoS 0/1/2）
+  const opts = props.argDef.options || []
+  const v = e.target.value
+  val.value = opts.some((o) => typeof o === 'number') && v !== '' ? Number(v) : v
+}
 </script>
 
 <template>
@@ -28,7 +35,7 @@ function onInput(e) {
       <option value="false">false</option>
     </select>
     <!-- 下拉 -->
-    <select v-else-if="argDef.type === 'select'" class="select" :value="val" @change="onInput">
+    <select v-else-if="argDef.type === 'select'" class="select" :value="val" @change="onSelect">
       <option v-if="!argDef.required" value="">—</option>
       <option v-for="o in argDef.options" :key="o" :value="o">{{ o }}</option>
     </select>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted, markRaw } from 'vue'
+import { ref, watch, onMounted, markRaw, nextTick } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -13,6 +13,9 @@ const edges = ref([])
 const nodeTypes = { sim: markRaw(SimNode) }
 const canvasRef = ref(null)
 const { screenToFlowCoordinate, onConnect: flowOnConnect, fitView, setViewport, viewport } = useVueFlow()
+
+// 记录当前 world 引用：仅当整体替换（加载/导入/示例）时触发 fitView
+let _lastWorld = null
 
 function syncFromWorld() {
   nodes.value = store.world.nodes.map((n) => ({
@@ -32,8 +35,15 @@ function syncFromWorld() {
 
 watch(
   () => [store.world, store.world?.nodes.length, store.world?.links.length],
-  () => {
-    if (store.world) syncFromWorld()
+  async () => {
+    if (store.world) {
+      syncFromWorld()
+      if (_lastWorld !== store.world) {
+        _lastWorld = store.world
+        await nextTick()
+        fitView({ padding: 0.15, duration: 0, maxZoom: 1.5 })
+      }
+    }
   },
   { deep: false }
 )
@@ -132,7 +142,6 @@ function handleDrop(e) {
       :node-types="nodeTypes"
       :min-zoom="0.2"
       :max-zoom="2"
-      fit-view-on-init
       :default-viewport="{ x: 40, y: 40, zoom: 1 }"
       @node-drag-stop="onNodeDragStop"
       @node-click="onNodeClick"

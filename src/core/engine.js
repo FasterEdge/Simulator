@@ -1,4 +1,5 @@
 import { ALL, componentDef } from './registry/index.js'
+import { invalid } from './errors.js'
 
 // CommandOutput 与 FasterEdge types.CommandOutput 对齐：{Name, Value, Err}
 export function makeOutput(name, value, err) {
@@ -65,6 +66,14 @@ export async function runCommand(world, nodeId, component, act, args, opts = {})
     return makeOutput(act, null, `component "${component}" not mounted on node "${node.name}"`)
   }
 
+  // 角色门控（对齐 Go：Cloud/EdgeRole 全部命令都要求对应角色）
+  if (def._requireRole) {
+    const role = node.abilities.RoleAbility?.role
+    if (role !== def._requireRole) {
+      return makeOutput(act, null, invalid(`requires role=${def._requireRole}`))
+    }
+  }
+
   // 依赖检查（Ability 依赖的 Data 必须在场）
   for (const dep of def.deps || []) {
     const depDef = componentDef(dep)
@@ -91,17 +100,15 @@ export async function runCommand(world, nodeId, component, act, args, opts = {})
   }
   try {
     const res = (await cmdDef.handler(ctx, checked.value, state)) || {}
-    if (res && res.__skipLog === undefined) {
-      world.logCommand({
-        nodeId,
-        nodeName: node.name,
-        component,
-        act,
-        args: checked.value,
-        value: res.value ?? null,
-        err: res.err ?? null,
-      })
-    }
+    world.logCommand({
+      nodeId,
+      nodeName: node.name,
+      component,
+      act,
+      args: checked.value,
+      value: res.value ?? null,
+      err: res.err ?? null,
+    })
     return makeOutput(act, res.value, res.err)
   } catch (e) {
     const err = `panic: ${e && e.message ? e.message : e}`

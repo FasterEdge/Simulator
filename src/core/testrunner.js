@@ -45,11 +45,14 @@ export function assertOutput(out, expect) {
     const s = JSON.stringify(out.Value ?? '')
     if (!s.includes(e.valueContains)) reasons.push(`期望 Value 包含 "${e.valueContains}"`)
   }
-  // valueEquals
+  // valueEquals（兼容数字型字符串：用户写 "8080" 或 8080 都应匹配）
   if (e.valueEquals !== undefined && e.valueEquals !== '') {
     const s = JSON.stringify(out.Value ?? '')
-    const want = JSON.stringify(tryParse(e.valueEquals, e.valueEquals))
-    if (s !== want) reasons.push(`期望 Value 等于 ${want}`)
+    const parsed = tryParse(e.valueEquals, null)
+    const want = JSON.stringify(parsed ?? e.valueEquals)
+    // 直接字符串值（如 "8080"）或 JSON 解析后的值（如 8080）任一相等即可
+    const raw = JSON.stringify(e.valueEquals)
+    if (s !== want && s !== raw) reasons.push(`期望 Value 等于 ${e.valueEquals}`)
   }
   // errContains
   if (e.errContains) {

@@ -65,9 +65,9 @@ npm run preview    # 预览生产构建
 | `TimeAbility`              | 基础       | `sync_manual` / `sync_system` / `sync_net` / `sync_ntp` / `get_time` / `configure_run`                                  |
 | `NetMapAbility`            | 基础       | `register_peer` / `unregister_peer` / `update_peer` / `list_peers` / `lookup_peer` / `get_topology`                     |
 | `OneKeyAbility`            | 基础       | `issue_token` / `verify_token` / `revoke_token` / `revoke_all` / `list_tokens` / `status` / `rotate` (HMAC-SHA256)     |
-| `CloudRoleAbility`         | 基础       | `describe` / `set_controller` / `register_service` / `set_status` / `heartbeat`(依赖 RoleAbility 且 role=cloud)        |
-| `EdgeRoleAbility`          | 基础       | `describe` / `set_zone` / `add_capability` / `record_latency` / `get_metrics` / `set_online`(依赖 RoleAbility 且 role=edge) |
-| `CmdAbility`               | 终端       | `run` / `start` / `wait` / `kill` / `list` / `set_allowlist` / `clear_finished`(可插拔 allowlist)                     |
+| `CloudRoleAbility`         | 基础       | `describe` / `set_controller` / `get_controller` / `register_service` / `unregister_service` / `list_services` / `set_status` / `get_status` / `heartbeat`(全部命令要求 role=cloud) |
+| `EdgeRoleAbility`          | 基础       | `describe` / `set_zone` / `get_zone` / `add_capability` / `remove_capability` / `list_capabilities` / `set_capabilities` / `record_latency` / `get_metrics` / `set_online`(全部命令要求 role=edge) |
+| `CmdAbility`               | 终端       | `run` / `start` / `wait` / `kill` / `list` / `set_allowlist` / `clear_finished`(allowlist 空表=拒绝一切,默认含常用命令) |
 | `ShAbility`                | 终端       | `run` / `start` / `wait` / `kill` / `list` / `set_allowlist`(基于 CmdAbility,sh -c 形式)                              |
 | `BashAbility`              | 终端       | `run` / `start` / `wait` / `kill` / `list` / `set_allowlist`(基于 ShAbility,bash --noprofile --norc -c 形式)        |
 | `ConfigFileAbility`        | 文件/配置  | `set_path` / `load` / `save` / `exists`(基于 ConfigData 的 JSON 持久化)                                                 |
@@ -117,7 +117,7 @@ const inbox = (await runCommand(world, edge.id, 'MQTTAbility', 'drain', {})).Val
 核心引擎为纯 JS 模块(`src/core/`),不依赖 Vue,可脱离浏览器直接测试：
 
 ```bash
-node smoke.mjs        # 38 项引擎断言（命令分发 / 依赖检查 / 令牌 / MQTT 路由 / 配置持久化 / 测试断言）
+node smoke.mjs        # 59 项引擎断言（命令分发 / 依赖检查 / 令牌 / MQTT 路由 / 配置持久化 / 测试断言 / 序列化往返）
 ```
 
 ### 七、测试
@@ -127,4 +127,4 @@ npm run build         # 生产构建通过（Vite 7 + Vue 3 + Vue Flow）
 node smoke.mjs        # 核心引擎冒烟测试全部通过
 ```
 
-当前覆盖：**引擎命令分发、依赖检查、参数校验、OneKey HMAC 令牌、MQTT 跨节点路由、ConfigFile 持久化、角色门控、测试断言等 38 项断言,全部通过;生产构建无错误。**
+当前覆盖：**引擎命令分发、依赖检查、参数校验、OneKey HMAC 令牌、MQTT 跨节点路由、ConfigFile 持久化、角色门控、测试断言、序列化/反序列化往返等 59 项断言,全部通过;生产构建无错误。**

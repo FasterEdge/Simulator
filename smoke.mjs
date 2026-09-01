@@ -152,5 +152,92 @@ const edgeForBool = w.nodes.find((n) => n.name === 'edge-01')
 out = await runCommand(w, edgeForBool.id, 'EdgeRoleAbility', 'set_online', { Online: 'false' })
 check("bool 参数 'false' 解析为 false", !out.Err && out.Value === false, JSON.stringify(out))
 
+// 16. hydrate 后新增节点 id 不与旧节点冲突
+const restored2 = hydrateWorld(serializeWorld(w))
+addNode(restored2, 'custom', 'after-load', 0, 0)
+const ids = restored2.nodes.map((n) => n.id)
+const idCollision = ids.length !== new Set(ids).size
+check('hydrate 后新增节点 id 不冲突', !idCollision, `ids=${ids.join(',')}`)
+
+// 17. 数据库 configure 后 status.configured === true
+const dbNode = addNode(restored2, 'db', 'db-01', 10, 10)
+out = await runCommand(restored2, dbNode.id, 'MySQLData', 'configure', { Host: 'db.local', Port: 3306 })
+check('db configure 成功', !out.Err, JSON.stringify(out).slice(0, 150))
+out = await runCommand(restored2, dbNode.id, 'MySQLData', 'status', {})
+check('db status.configured === true', !out.Err && out.Value.configured === true, JSON.stringify(out))
+// 模板自带的 InfluxDBAbility 依赖 InfluxDBData 已满足（edge/sensor 模板）
+const eNode = addNode(restored2, 'edge', 'edge-tpl', 20, 20)
+out = await runCommand(restored2, eNode.id, 'InfluxDBAbility', 'list_series', {})
+check('edge 模板 InfluxDBAbility 依赖已满足', !out.Err, JSON.stringify(out).slice(0, 150))
+
+// 18. 递归能力依赖：挂 AlgorithmDistributionAbility 自动补 NetMapData/NetMapAbility/FileTransferAbility
+const cust2 = addNode(restored2, 'custom', 'c2', 30, 30)
+attachComponent(restored2, cust2.id, 'AlgorithmDistributionAbility')
+const hasAll = !!(cust2.data.NetMapData && cust2.abilities.NetMapAbility && cust2.abilities.FileTransferAbility)
+check('递归补齐能力依赖', hasAll, JSON.stringify({ data: Object.keys(cust2.data), ab: Object.keys(cust2.abilities) }))
+out = await runCommand(restored2, cust2.id, 'AlgorithmDistributionAbility', 'list_distributions', {})
+check('递归依赖后命令可执行', !out.Err, JSON.stringify(out).slice(0, 150))
+
+// 19. hydrate 步骤归一化：缺 expect 的旧步骤不崩且可渲染
+const worldWithOldStep = hydrateWorld({
+  name: 'old',
+  nodes: [],
+  links: [],
+  scenarios: [{ id: 's1', name: '老场景', steps: [{ id: 'x', name: '旧步骤', node: '', component: '', command: '', args: '{"a":1}' }] }],
+})
+check('旧步骤 expect 被归一化', worldWithOldStep.scenarios[0].steps[0].expect?.success === 'any' && worldWithOldStep.scenarios[0].steps[0].args === '{"a":1}')
+
+// 20. 序列化日志截断到最近 200 条
+const bigLogWorld = createWorld()
+for (let i = 0; i < 250; i++) bigLogWorld.logs.push({ ts: i, nodeName: 'x', component: 'c', act: 'a', value: i })
+const serLogs = serializeWorld(bigLogWorld).logs.length
+check('持久化日志截断到 200', serLogs === 200, `len=${serLogs}`)
+
+// 21. allowlist：空表拒绝；前缀精确（ls 不放行 lsblk）；set_allowlist 后放行
+const aw = createWorld()
+const awNode = addNode(aw, 'custom', 'aw-node', 0, 0)
+attachComponent(aw, awNode.id, 'CmdAbility')
+await runCommand(aw, awNode.id, 'CmdAbility', 'set_allowlist', { Commands: [] })
+out = await runCommand(aw, awNode.id, 'CmdAbility', 'run', { Command: 'echo hi' })
+check('allowlist 空表拒绝命令', !!out.Err && out.Err.includes('allowlist'), JSON.stringify(out))
+await runCommand(aw, awNode.id, 'CmdAbility', 'set_allowlist', { Commands: ['ls'] })
+out = await runCommand(aw, awNode.id, 'CmdAbility', 'run', { Command: 'lsblk' })
+check('allowlist 前缀精确（ls 不放行 lsblk）', !!out.Err, JSON.stringify(out))
+out = await runCommand(aw, awNode.id, 'CmdAbility', 'run', { Command: 'ls /' })
+check('allowlist 精确命令放行', !out.Err, JSON.stringify(out))
+
+// 22. Keyring 指纹不回显明文密钥
+const kw = createWorld()
+const kn = addNode(kw, 'custom', 'kr-node', 0, 0)
+attachComponent(kw, kn.id, 'KeyringData')
+const krPre = kn.data.KeyringData.secret
+out = await runCommand(kw, kn.id, 'KeyringData', 'status', {})
+const finger = out.Value.secretFinger
+check('密钥指纹非明文前缀', !finger.includes(krPre.slice(0, 8)) && /^[0-9a-f]{16}$/.test(finger), `finger=${finger}`)
+
+// 23. 负 TTL 报错
+out = await runCommand(kw, kn.id, 'KeyringData', 'issue_token', { Subject: 'x', TTL: -5 })
+check('负 TTL 被拒绝', !!out.Err && out.Err.includes('ttl must be positive'), JSON.stringify(out))
+
+// 24. SQLiteData 无 set_secret/clear_secret（_withSecret=false）
+const dbw = createWorld()
+const dbn = addNode(dbw, 'db', 'db-node', 0, 0)
+out = await runCommand(dbw, dbn.id, 'SQLiteData', 'set_secret', { Secret: 'abcd' })
+check('SQLiteData 无 set_secret 命令', !!out.Err && out.Err.includes('unsupported'), JSON.stringify(out))
+out = await runCommand(dbw, dbn.id, 'SQLiteData', 'status', {})
+check('SQLiteData status 字段对齐', !out.Err && 'secretConfigured' in out.Value, JSON.stringify(out))
+
+// 25. MQTT drain 未订阅报错；角色门控全命令
+const mw = buildExampleWorld()
+const me1 = mw.nodes.find((n) => n.name === 'edge-01')
+out = await runCommand(mw, me1.id, 'MQTTAbility', 'drain', { Topic: 'edge/+/status' })
+check('drain 未订阅主题报错', !!out.Err && out.Err.includes('not subscribed'), JSON.stringify(out))
+// 无角色节点挂 EdgeRoleAbility，任意命令都应被门控拒绝
+const rw = createWorld()
+const rn = addNode(rw, 'custom', 'role-node', 0, 0)
+attachComponent(rw, rn.id, 'EdgeRoleAbility')
+out = await runCommand(rw, rn.id, 'EdgeRoleAbility', 'get_zone', {})
+check('EdgeRole 无角色时全命令拒绝（get_zone）', !!out.Err && out.Err.includes('role=edge'), JSON.stringify(out))
+
 console.log('\n' + (failures === 0 ? '🎉 全部通过' : `❌ ${failures} 个失败`))
 process.exit(failures === 0 ? 0 : 1)

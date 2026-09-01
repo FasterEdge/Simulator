@@ -26,7 +26,7 @@ export const store = reactive({
     selectedNodeId: null,
     selectedComponent: null, // 当前选中的组件名（节点面板内）
     view: 'topology', // 'topology' | 'inspector'
-    inspectorTab: 'components', // components | state | console
+    inspectorTab: 'node', // node | console | test
     testTab: 'list', // list | editor
     consoleFilter: '',
     rightOpen: true,
@@ -79,9 +79,14 @@ export function loadExample() {
   toast('已载入示例拓扑')
 }
 
-export function saveWorld() {
-  saveToLocal(store.world)
-  toast('已保存到本地')
+export function saveWorld(opts = {}) {
+  const res = saveToLocal(store.world)
+  if (!res.ok) {
+    toast(`本地保存失败：${res.reason}（存储可能已满）`, 'error')
+  } else if (!opts.silent) {
+    toast('已保存到本地')
+  }
+  return res.ok
 }
 
 export function exportWorld() {
@@ -238,6 +243,8 @@ export function selectNode(id) {
   store.ui.selectedNodeId = id
   store.ui.selectedComponent = null
   store.ui.view = id ? 'inspector' : 'topology'
+  // 点击节点时自动切到"节点"面板
+  if (id) store.ui.inspectorTab = 'node'
 }
 
 export function toggleLeft() {

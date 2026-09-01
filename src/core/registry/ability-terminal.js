@@ -46,6 +46,9 @@ function simulateShell(node, cmdline) {
 // ============================================================
 // CmdAbility（模拟进程表 + allowlist）
 // ============================================================
+// 模拟 Shell 支持的常用命令（默认白名单，开箱可用；set_allowlist 可收紧，[] 表示拒绝一切）
+const DEFAULT_ALLOWLIST = ['echo', 'hostname', 'uname', 'pwd', 'whoami', 'id', 'ls', 'cat', 'date', 'printenv', 'true', 'false']
+
 function makeCmdAbility(name, describe, wrapper) {
   return {
     name,
@@ -53,7 +56,7 @@ function makeCmdAbility(name, describe, wrapper) {
     category: '终端',
     describe,
     deps: ['BaseData'],
-    initState: () => ({ jobs: {}, allowlist: [], seq: 1 }),
+    initState: () => ({ jobs: {}, allowlist: [...DEFAULT_ALLOWLIST], seq: 1 }),
     commands: {
       run: {
         describe: '运行命令并等待结果',
@@ -155,9 +158,19 @@ function makeCmdAbility(name, describe, wrapper) {
 }
 
 function checkAllowlist(allowlist, cmd) {
-  if (!allowlist.length) return true
-  const first = cmd.split(/\s+/)[0]
-  return allowlist.some((p) => p === first || cmd.startsWith(p))
+  // 空表 = 拒绝一切（对齐 Go：未配置即未授权）
+  if (!allowlist || !allowlist.length) return false
+  const tokens = cmd.split(/\s+/).filter(Boolean)
+  if (!tokens.length) return false
+  return allowlist.some((entry) => {
+    const et = String(entry).trim().split(/\s+/).filter(Boolean)
+    if (!et.length) return false
+    // 逐 token 精确匹配（entry 作为命令前缀模式），避免 ls 放行 lsblk
+    for (let i = 0; i < et.length; i++) {
+      if (i >= tokens.length || tokens[i] !== et[i]) return false
+    }
+    return true
+  })
 }
 
 export const CmdAbility = makeCmdAbility('CmdAbility', 'CmdAbility 提供命令执行能力（模拟 Shell + 进程表 + 可插拔白名单）。')
@@ -180,7 +193,7 @@ export const ConfigFileAbility = {
       args: [{ key: 'Path', label: '路径', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
         const p = String(a.Path || '').trim()
-        if (!/\.json$/.test(p)) return fail(invalid('path must end with .json'))
+        if (!p) return fail(invalid('path empty'))
         s.path = p
         return ok(s.path)
       },

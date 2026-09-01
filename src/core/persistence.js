@@ -1,4 +1,4 @@
-import { createWorld, addNode, resetId } from './world.js'
+import { createWorld, addNode, resetId, setIdCounter } from './world.js'
 import { TEMPLATES } from './registry/index.js'
 
 const LS_KEY = 'fasteredge-simulator-v1'
@@ -22,7 +22,11 @@ export function serializeWorld(world) {
     })),
     links: world.links.map((l) => ({ id: l.id, source: l.source, target: l.target })),
     scenarios: JSON.parse(JSON.stringify(world.scenarios || [])),
-    logs: world.logs.map((l) => ({ ...l, ts: l.ts })),
+    // 只持久化最近 200 条日志，避免 localStorage 膨胀与每次序列化开销
+    logs: (world.logs || []).slice(-200).map((l) => ({
+      ts: l.ts, nodeId: l.nodeId, nodeName: l.nodeName, component: l.component, act: l.act,
+      value: l.value ?? null, err: l.err || null,
+    })),
   }
 }
 
@@ -33,6 +37,7 @@ export function hydrateWorld(obj) {
   world.name = obj?.name || '未命名编排'
   world.clockOffsetMs = obj?.clockOffsetMs || 0
   // 重建节点
+  let maxNodeNum = 0
   for (const n of obj?.nodes || []) {
     const template = TEMPLATES[n.template] || TEMPLATES.custom
     const node = {
@@ -49,9 +54,20 @@ export function hydrateWorld(obj) {
       fs: n.fs || {},
     }
     world.nodes.push(node)
+    // 扫描最大数字后缀，抬升全局 id 计数器，避免新增节点 id 冲突
+    const m = /^node-(\d+)$/.exec(n.id)
+    if (m) maxNodeNum = Math.max(maxNodeNum, Number(m[1]))
   }
-  world.links = (obj?.links || []).map((l) => ({ id: l.id, source: l.source, target: l.target }))
-  world.scenarios = obj?.scenarios || []
+  setIdCounter(maxNodeNum + 1)
+  // 步骤归一化：缺 expect/args 时补默认，避免 UI 渲染崩溃
+  world.scenarios = (obj?.scenarios || []).map((sc) => ({
+    ...sc,
+    steps: (sc?.steps || []).map((st) => ({
+      ...st,
+      args: st.args === undefined ? {} : st.args,
+      expect: st.expect || { success: 'any', valueContains: '', errContains: '', valueEquals: '' },
+    })),
+  }))
   world.logs = (obj?.logs || []).map((l) => ({ ts: l.ts || 0, ...l })).slice(-2000)
   // 重建世界 Broker：连接会话与订阅（跨节点 MQTT 路由依赖它）
   world.broker.clear()
@@ -67,13 +83,13 @@ export function hydrateWorld(obj) {
   return world
 }
 
-// localStorage 自动保存/加载
+// localStorage 自动保存/加载；失败时返回 { ok:false, reason }
 export function saveToLocal(world) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(serializeWorld(world)))
-    return true
+    return { ok: true }
   } catch (e) {
-    return false
+    return { ok: false, reason: String(e?.name || e) }
   }
 }
 

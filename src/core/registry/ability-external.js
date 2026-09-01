@@ -1,6 +1,20 @@
 import { ok, fail, invalid } from '../errors.js'
 import { randomToken } from '../crypto.js'
 
+// 可接受的 Broker scheme（对齐主仓库），拒绝 localhost/私网地址
+const BROKER_SCHEMES = ['tcp', 'tls', 'ssl', 'ws', 'wss']
+function validBrokerURL(url) {
+  if (typeof url !== 'string' || !url) return false
+  const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/]*)/.exec(url)
+  if (!m) return false
+  if (!BROKER_SCHEMES.includes(m[1].toLowerCase())) return false
+  const hostport = m[2]
+  if (!hostport) return false
+  const host = hostport.split(':')[0]
+  if (!host || /^(localhost|127\.|0\.0\.0\.0|::1)/.test(host)) return false
+  return true
+}
+
 // 把 MQTTAbility 的本地订阅同步到世界 Broker（跨节点路由依赖它）
 function syncBrokerSubs(ctx, s) {
   if (ctx.world?.broker) {
@@ -26,10 +40,12 @@ export const MQTTAbility = {
   }),
   commands: {
     set_broker: {
-      describe: '设置 Broker 地址',
+      describe: '设置 Broker 地址（tcp/tls/ws 等 scheme）',
       args: [{ key: 'URL', label: 'Broker URL', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        s.broker = String(a.URL).trim()
+        const url = String(a.URL).trim()
+        if (!validBrokerURL(url)) return fail(invalid(`unsupported broker URL: ${url}`))
+        s.broker = url
         return ok(s.broker)
       },
     },
@@ -134,10 +150,14 @@ export const MQTTAbility = {
       },
     },
     drain: {
-      describe: '排空订阅队列（返回并清空消息）',
+      describe: '排空订阅队列（给出 Topic 时必须已订阅）',
       args: [{ key: 'Topic', label: '主题', type: 'string' }],
       handler: async (ctx, a, s) => {
         const topic = a.Topic ? String(a.Topic).trim() : null
+        if (topic) {
+          const sub = s.subscriptions.find((x) => x.topic === topic)
+          if (!sub) return fail(invalid(`not subscribed to "${topic}"`))
+        }
         const out = topic
           ? s.inbox.filter((m) => m.topic === topic)
           : [...s.inbox]

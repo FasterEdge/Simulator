@@ -3,26 +3,22 @@ import { randomHex, randomToken, hmacSignBase64Url, strToBytes } from '../crypto
 import { KeyringData } from './data.js'
 const keyringCommands = KeyringData.commands
 
-// 主题通配符匹配（MQTT + / #）
-function topicMatch(pattern, topic) {
-  if (pattern === topic) return true
-  if (pattern === '#') return true
-  const p = pattern.split('/')
-  const t = topic.split('/')
-  for (let i = 0; i < p.length; i++) {
-    const seg = p[i]
-    if (seg === '#') return true
-    if (i >= t.length) return false
-    if (seg === '+') continue
-    if (seg !== t[i]) return false
-  }
-  return p.length === t.length
-}
-
+// 与主仓库一致：允许 host:port / 纯 IP / 主机名（不含协议前缀、不含路径、不含非法字符）
 function validPeerAddress(addr) {
-  if (!addr || typeof addr !== 'string') return false
+  if (!addr || typeof addr !== 'string' || !addr) return false
   if (/[\s/\\?#]/.test(addr)) return false
-  return true
+  // host:port 形式：要求 host 非空、端口为 1-65535 数字
+  const ci = addr.lastIndexOf(':')
+  if (ci > 0) {
+    const host = addr.slice(0, ci)
+    const port = addr.slice(ci + 1)
+    if (!host || !/^\d{1,5}$/.test(port)) return false
+    const pn = Number(port)
+    if (!(pn >= 1 && pn <= 65535)) return false
+    return true
+  }
+  // 纯 IP 或主机名：仅允许字母数字、点、连字符、下划线
+  return /^[a-zA-Z0-9._-]+$/.test(addr)
 }
 
 function nowIso() {
@@ -95,6 +91,7 @@ export const CloudRoleAbility = {
   category: '基础',
   describe: 'CloudRoleAbility 提供云端控制面能力：服务注册、状态上报与心跳。',
   deps: ['BaseData', 'RoleAbility'],
+  _requireRole: 'cloud',
   initState: () => ({ controller: '', services: {}, status: 'online', lastHeartbeat: null }),
   commands: {
     describe: {
@@ -179,6 +176,7 @@ export const EdgeRoleAbility = {
   category: '基础',
   describe: 'EdgeRoleAbility 提供边缘节点能力：区域、能力清单、延迟指标与在线状态。',
   deps: ['BaseData', 'RoleAbility'],
+  _requireRole: 'edge',
   initState: () => ({ zone: '', capabilities: [], latency: [], metrics: {}, online: false }),
   commands: {
     describe: {
@@ -441,7 +439,7 @@ export const NetMapAbility = {
           const p = Object.values(s.peers).find((x) => x.address === addr)
           if (p) return ok({ ...p, lastSeen: new Date(p.lastSeen).toISOString() })
         }
-        return fail('peer not found')
+        return fail(invalid('peer not found'))
       },
     },
     get_topology: {
@@ -468,6 +466,8 @@ export const NetMapAbility = {
 // ============================================================
 // OneKeyAbility（依赖 BaseData + NetMapData + KeyringData）
 // ============================================================
+// 注意：时间戳单位与主仓库 Go 版不同（Go 用 UnixNano，这里用 ms）。
+// 本工具为离线模拟器，令牌仅在浏览器内签发/校验，不做跨仓库互通，故保留 ms 便于 UI 阅读。
 export const OneKeyAbility = {
   name: 'OneKeyAbility',
   kind: 'ability',
@@ -486,7 +486,11 @@ export const OneKeyAbility = {
         const subject = String(a.Subject || '').trim()
         if (!subject) return fail(invalid('subject empty'))
         const kr = ctx.node.data.KeyringData
-        const ttlMs = (a.TTL && Number(a.TTL) > 0 ? Number(a.TTL) : 24 * 3600) * 1000
+        // 显式负 TTL 报错；0/缺省使用默认
+        if (a.TTL !== undefined && a.TTL !== null && a.TTL !== '' && Number(a.TTL) <= 0) {
+          return fail(invalid('ttl must be positive'))
+        }
+        const ttlMs = (a.TTL !== undefined && a.TTL !== null && a.TTL !== '' && Number(a.TTL) > 0 ? Number(a.TTL) : 24 * 3600) * 1000
         // 复用 KeyringData 的签发逻辑
         const out = await krCommand(ctx, 'issue_token', { Subject: subject, TTL: ttlMs / 1000 })
         if (out.err) return fail(out.err)

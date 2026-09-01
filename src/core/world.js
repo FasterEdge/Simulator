@@ -17,6 +17,8 @@ function createBroker(world) {
             const mqtt = node?.abilities?.MQTTAbility
             if (mqtt && mqtt.connected) {
               mqtt.inbox.push({ topic, payload, qos, retain, from: fromNodeId, at: new Date().toISOString() })
+              // 队列上限（drop-oldest），避免无限增长
+              if (mqtt.inbox.length > 256) mqtt.inbox.splice(0, mqtt.inbox.length - 256)
               delivered.push({ nodeId, topic: sub.topic })
             }
             break
@@ -62,6 +64,11 @@ export const nextId = (prefix) => `${prefix}${uid++}`
 
 export function resetId() {
   uid = 1
+}
+
+// 把全局 id 计数器抬到至少 n（加载持久化世界后避免 id 冲突）
+export function setIdCounter(n) {
+  if (typeof n === 'number' && n > uid) uid = n
 }
 
 export function createWorld() {
@@ -158,8 +165,11 @@ export function detachComponent(world, nodeId, compName) {
   const node = world.nodes.find((n) => n.id === nodeId)
   if (!node) return { err: 'node not found' }
   const def = ALL[compName]
-  if (def && def.kind === 'ability') delete node.abilities[compName]
-  else if (def) delete node.data[compName]
+  if (def && def.kind === 'ability') {
+    // 卸载 MQTTAbility 时同步断开世界 Broker，避免订阅/会话残留
+    if (compName === 'MQTTAbility') world.broker.disconnect(nodeId)
+    delete node.abilities[compName]
+  } else if (def) delete node.data[compName]
   else {
     if (node.abilities[compName] !== undefined) delete node.abilities[compName]
     if (node.data[compName] !== undefined) delete node.data[compName]

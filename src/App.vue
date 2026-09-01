@@ -13,13 +13,13 @@ onMounted(() => {
   store.ui.view = store.ui.selectedNodeId ? 'inspector' : 'topology'
 })
 
-// 自动保存（防抖）
+// 自动保存（防抖，静默——不每次弹提示）
 let saveTimer = null
 watch(
   () => store.world,
   () => {
     clearTimeout(saveTimer)
-    saveTimer = setTimeout(() => saveWorld(), 1200)
+    saveTimer = setTimeout(() => saveWorld({ silent: true }), 1200)
   },
   { deep: true }
 )

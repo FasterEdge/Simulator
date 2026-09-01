@@ -1,5 +1,5 @@
 import { ok, fail, invalid } from '../errors.js'
-import { randomHex } from '../crypto.js'
+import { randomHex, sha256Hex } from '../crypto.js'
 
 // 与 package.json 保持一致（Vite 构建时可被替换，运行时读不到 json，这里显式维护）
 const VERSION = '1.0.20260901'
@@ -24,7 +24,7 @@ export const BaseData = {
     logo: {
       describe: '返回框架 Logo',
       args: [],
-      handler: async () => ok({ text: LOGO }),
+      handler: async () => ok(LOGO),
     },
     info: {
       describe: '返回框架信息',
@@ -122,7 +122,7 @@ export const KeyringData = {
         const active = Object.values(s.tokens).filter((t) => !t.revoked && t.expiresAt > Date.now()).length
         return ok({
           algorithm: s.algorithm,
-          secretFinger: s.secret.slice(0, 16) + '…',
+          secretFinger: (await sha256Hex(s.secret)).slice(0, 16),
           activeTokens: active,
           totalIssued: s.totalIssued,
           lastRotatedAt: new Date(s.lastRotatedAt).toISOString(),
@@ -139,7 +139,7 @@ export const KeyringData = {
         s.totalIssued = 0
         s.revokedCount = 0
         s.lastRotatedAt = Date.now()
-        return ok(s.secret.slice(0, 16) + '…')
+        return ok((await sha256Hex(s.secret)).slice(0, 16))
       },
     },
     rotate: {
@@ -151,7 +151,7 @@ export const KeyringData = {
         s.totalIssued = 0
         s.revokedCount = 0
         s.lastRotatedAt = Date.now()
-        return ok(s.secret.slice(0, 16) + '…')
+        return ok((await sha256Hex(s.secret)).slice(0, 16))
       },
     },
     list_tokens: {
@@ -169,7 +169,10 @@ export const KeyringData = {
       handler: async (ctx, a, s) => {
         const subject = String(a.Subject || '').trim()
         if (!subject) return fail(invalid('subject empty'))
-        const ttl = (a.TTL && Number(a.TTL) > 0 ? Number(a.TTL) : s.defaultTokenTTL / 1000) * 1000
+        if (a.TTL !== undefined && a.TTL !== null && a.TTL !== '' && Number(a.TTL) <= 0) {
+          return fail(invalid('ttl must be positive'))
+        }
+        const ttl = (a.TTL !== undefined && a.TTL !== null && a.TTL !== '' && Number(a.TTL) > 0 ? Number(a.TTL) : s.defaultTokenTTL / 1000) * 1000
         if (s.tokens[subject] && !s.tokens[subject].revoked && s.tokens[subject].expiresAt > Date.now()) {
           return fail(invalid(`subject "${subject}" has an active token`))
         }
@@ -274,61 +277,78 @@ function dbConfigFields(configShape) {
   return configShape
 }
 
-const dbCommands = (shape) => ({
-  configure: {
-    describe: `配置 ${shape.name} 公开连接参数`,
-    args: shape.args,
-    handler: async (ctx, a, s) => {
-      const cfg = { ...s.config }
-      for (const arg of shape.args) {
-        if (a[arg.key] !== undefined && a[arg.key] !== null) {
-          cfg[arg.key] = arg.type === 'number' ? Number(a[arg.key]) : String(a[arg.key])
+const dbCommands = (shape, withSecret) => {
+  const cmds = {
+    configure: {
+      describe: `配置 ${shape.name} 公开连接参数`,
+      args: shape.args,
+      handler: async (ctx, a, s) => {
+        const cfg = { ...s.config }
+        for (const arg of shape.args) {
+          if (a[arg.key] !== undefined && a[arg.key] !== null) {
+            cfg[arg.key] = arg.type === 'number' ? Number(a[arg.key]) : String(a[arg.key])
+          }
         }
-      }
-      if (shape.validate && !shape.validate(cfg)) return fail(invalid('invalid config'))
-      s.config = cfg
-      s.configured = true
-      s.revision++
-      return ok({ version: '1', config: JSON.parse(JSON.stringify(s.config)) })
+        if (shape.validate && !shape.validate(cfg)) return fail(invalid('invalid config'))
+        s.config = cfg
+        s.configured = true
+        s.revision++
+        s.updatedAt = Date.now()
+        return ok({ version: '1', config: JSON.parse(JSON.stringify(s.config)), status: dbStatus(s) })
+      },
     },
-  },
-  set_secret: {
-    describe: '设置独立密码/令牌（仅保存在私有内存）',
-    args: [{ key: 'Secret', label: '密码/令牌', type: 'string', required: true }],
-    handler: async (ctx, a, s) => {
-      if (String(a.Secret || '').length < 4) return fail(invalid('secret too short'))
-      s.hasSecret = true
-      s.revision++
-      return ok('ok')
+    get_config: {
+      describe: '获取公开连接参数（不含密码）',
+      args: [],
+      handler: async (ctx, a, s) => ok(JSON.parse(JSON.stringify(s.config))),
     },
-  },
-  clear_secret: {
-    describe: '清除独立密码/令牌',
-    args: [],
-    handler: async (ctx, a, s) => {
-      s.hasSecret = false
-      s.revision++
-      return ok('ok')
+    status: {
+      describe: '查看运行状态与修订号',
+      args: [],
+      handler: async (ctx, a, s) => ok(dbStatus(s)),
     },
-  },
-  get_config: {
-    describe: '获取公开连接参数（不含密码）',
-    args: [],
-    handler: async (ctx, a, s) => ok(JSON.parse(JSON.stringify(s.config))),
-  },
-  status: {
-    describe: '查看运行状态与修订号',
-    args: [],
-    handler: async (ctx, a, s) =>
-      ok({ name: shape.name, configured: s.configured, hasSecret: s.hasSecret, revision: s.revision }),
-  },
-  snapshot: {
-    describe: '返回完整快照',
-    args: [],
-    handler: async (ctx, a, s) =>
-      ok({ version: '1', config: JSON.parse(JSON.stringify(s.config)), status: { hasSecret: s.hasSecret, revision: s.revision } }),
-  },
-})
+    snapshot: {
+      describe: '返回完整快照',
+      args: [],
+      handler: async (ctx, a, s) =>
+        ok({ version: '1', config: JSON.parse(JSON.stringify(s.config)), status: dbStatus(s) }),
+    },
+  }
+  if (withSecret) {
+    cmds.set_secret = {
+      describe: '设置独立密码/令牌（仅保存在私有内存）',
+      args: [{ key: 'Secret', label: '密码/令牌', type: 'string', required: true }],
+      handler: async (ctx, a, s) => {
+        if (String(a.Secret || '').length < 4) return fail(invalid('secret too short'))
+        s.hasSecret = true
+        s.revision++
+        s.updatedAt = Date.now()
+        return ok('ok')
+      },
+    }
+    cmds.clear_secret = {
+      describe: '清除独立密码/令牌',
+      args: [],
+      handler: async (ctx, a, s) => {
+        s.hasSecret = false
+        s.revision++
+        s.updatedAt = Date.now()
+        return ok('ok')
+      },
+    }
+  }
+  return cmds
+}
+
+// 对齐主仓库 DatabaseStatus：{configured, secretConfigured, revision, updatedAt}
+function dbStatus(s) {
+  return {
+    configured: s.configured,
+    secretConfigured: !!s.hasSecret,
+    revision: s.revision,
+    updatedAt: s.updatedAt ? new Date(s.updatedAt).toISOString() : null,
+  }
+}
 
 const SQLConfig = {
   host: { key: 'Host', label: '主机', type: 'string' },
@@ -376,8 +396,14 @@ function makeDB(name, describe, shapeArgs, defaults, withSecret = true) {
     category: '数据库',
     describe,
     deps: [],
-    initState: () => ({ config: JSON.parse(JSON.stringify(initCfg)), hasSecret: false, revision: 0, configured: false }),
-    commands: dbCommands({ name, args: Object.values(shapeArgs), validate: (cfg) => true }),
+    initState: () => ({
+      config: JSON.parse(JSON.stringify(initCfg)),
+      hasSecret: false,
+      revision: 0,
+      configured: false,
+      updatedAt: null,
+    }),
+    commands: dbCommands({ name, args: Object.values(shapeArgs), validate: (cfg) => true }, withSecret),
     _withSecret: withSecret,
   }
 }

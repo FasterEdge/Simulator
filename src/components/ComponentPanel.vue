@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { store, execCommand } from '../store.js'
 import { ALL } from '../core/registry/index.js'
 import ArgInput from './ArgInput.vue'
@@ -30,6 +30,17 @@ const activeCmd = ref(null)
 const argValues = ref({})
 const result = ref(null) // {out, ok, running}
 const error = ref(null)
+
+// 切换节点/组件时重置本面板内部状态（避免同名组件复用导致的陈旧结果）
+watch(
+  () => [props.nodeId, props.component],
+  () => {
+    activeCmd.value = null
+    argValues.value = {}
+    result.value = null
+    error.value = null
+  }
+)
 
 function openCmd(cmd) {
   activeCmd.value = activeCmd.value?.name === cmd.name ? null : cmd
