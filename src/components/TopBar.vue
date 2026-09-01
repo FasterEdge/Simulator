@@ -7,6 +7,7 @@ import {
   exportWorld,
   importWorldFile,
   loadSampleScenarios,
+  requestExportPng,
 } from '../store.js'
 import { ref } from 'vue'
 
@@ -31,6 +32,7 @@ function onImport(e) {
     <span class="tb-sep" />
     <button class="btn sm" title="保存到 localStorage" @click="saveWorld">保存</button>
     <button class="btn sm" title="导出为 JSON 文件" @click="exportWorld">导出 JSON</button>
+    <button class="btn sm primary" title="导出当前画布为完整 PNG 图片" @click="requestExportPng">导出 PNG</button>
     <button class="btn sm" title="从 JSON 文件导入拓扑" @click="fileInput.click()">导入 JSON</button>
     <span class="tb-sep" />
     <button class="btn sm" title="载入三个内置离线测试场景" @click="loadSampleScenarios">示例测试</button>

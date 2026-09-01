@@ -30,6 +30,8 @@ export const store = reactive({
     testTab: 'list', // list | editor
     consoleFilter: '',
     rightOpen: true,
+    leftOpen: true,
+    exportPngTick: 0, // 递增触发画布导出 PNG
   },
   toasts: [],
 })
@@ -236,6 +238,18 @@ export function selectNode(id) {
   store.ui.selectedNodeId = id
   store.ui.selectedComponent = null
   store.ui.view = id ? 'inspector' : 'topology'
+}
+
+export function toggleLeft() {
+  store.ui.leftOpen = !store.ui.leftOpen
+}
+export function toggleRight() {
+  store.ui.rightOpen = !store.ui.rightOpen
+}
+
+// 触发画布导出 PNG（TopologyCanvas 监听 tick 执行）
+export function requestExportPng() {
+  store.ui.exportPngTick++
 }
 
 export const templates = TEMPLATES

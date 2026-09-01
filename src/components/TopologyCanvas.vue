@@ -4,13 +4,15 @@ import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import { store, addNodeFromTemplate, connectNodes, removeLink, moveNode, selectNode } from '../store.js'
+import { toPng } from 'html-to-image'
+import { store, addNodeFromTemplate, connectNodes, removeLink, moveNode, selectNode, toast } from '../store.js'
 import SimNode from './SimNode.vue'
 
 const nodes = ref([])
 const edges = ref([])
 const nodeTypes = { sim: markRaw(SimNode) }
-const { screenToFlowCoordinate, onConnect: flowOnConnect } = useVueFlow()
+const canvasRef = ref(null)
+const { screenToFlowCoordinate, onConnect: flowOnConnect, fitView, setViewport, viewport } = useVueFlow()
 
 function syncFromWorld() {
   nodes.value = store.world.nodes.map((n) => ({
@@ -39,6 +41,53 @@ watch(
 onMounted(() => {
   if (store.world) syncFromWorld()
 })
+
+// ===== 导出完整画布 PNG =====
+async function exportPng() {
+  const wrap = canvasRef.value
+  if (!wrap) return
+  if (!store.world?.nodes?.length) {
+    toast('画布为空，无可导出内容', 'error')
+    return
+  }
+  const flowEl = wrap.querySelector('.vue-flow')
+  if (!flowEl) return
+  const hint = wrap.querySelector('.canvas-hint')
+  const prev = { ...(viewport.value || { x: 0, y: 0, zoom: 1 }) }
+  try {
+    if (hint) hint.style.display = 'none'
+    // 先缩放到完整拓扑，再截图
+    await fitView({ padding: 0.15, duration: 0, maxZoom: 1.5 })
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    await new Promise((r) => setTimeout(r, 60))
+    const dataUrl = await toPng(flowEl, {
+      pixelRatio: 2,
+      backgroundColor: '#0a0e17',
+      cacheBust: true,
+      filter: (node) =>
+        !node.classList?.contains('vue-flow__minimap') &&
+        !node.classList?.contains('vue-flow__controls') &&
+        !node.classList?.contains('vue-flow__attribution'),
+    })
+    const a = document.createElement('a')
+    a.href = dataUrl
+    a.download = `${store.world?.name || 'topology'}-${Date.now()}.png`
+    a.click()
+    toast('已导出画布 PNG')
+  } catch (e) {
+    toast('导出失败：' + (e?.message || e), 'error')
+  } finally {
+    if (hint) hint.style.display = ''
+    setViewport(prev)
+  }
+}
+
+watch(
+  () => store.ui.exportPngTick,
+  () => {
+    if (store.ui.exportPngTick) exportPng()
+  }
+)
 
 flowOnConnect((conn) => {
   if (conn.source && conn.target) connectNodes(conn.source, conn.target)
@@ -76,7 +125,7 @@ function handleDrop(e) {
 </script>
 
 <template>
-  <div class="canvas-wrap" @dragover.prevent="handleDragOver" @drop.prevent="handleDrop">
+  <div ref="canvasRef" class="canvas-wrap" @dragover.prevent="handleDragOver" @drop.prevent="handleDrop">
     <VueFlow
       v-model:nodes="nodes"
       v-model:edges="edges"
