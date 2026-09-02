@@ -1,6 +1,6 @@
 {
   "name": "fasteredge-simulator",
-  "version": "1.0.20260901",
+  "version": "1.0.20260902",
   "description": "FasterEdge 纯前端离线模拟编排与测试工具（拓扑拖拽 + Ability/Data 组件 + 命令控制台）",
   "author": "FasterEdge <fasteredge@mutantcat.org>",
   "repository": {
