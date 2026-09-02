@@ -1,4 +1,6 @@
 <script setup>
+
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 import { computed } from 'vue'
 
 const props = defineProps({

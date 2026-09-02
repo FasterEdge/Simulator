@@ -1,3 +1,4 @@
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 import { createWorld, addNode, resetId, setIdCounter } from './world.js'
 import { TEMPLATES } from './registry/index.js'
 

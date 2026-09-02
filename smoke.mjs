@@ -1,3 +1,4 @@
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 // 引擎冒烟测试：不依赖 DOM，直接用 Node 验证核心逻辑
 import { createWorld, addNode, attachComponent } from './src/core/world.js'
 import { runCommand } from './src/core/engine.js'

@@ -1,3 +1,4 @@
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 import { ALL, componentDef } from './registry/index.js'
 import { invalid } from './errors.js'
 

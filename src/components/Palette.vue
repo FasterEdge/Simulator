@@ -1,4 +1,6 @@
 <script setup>
+
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 import { templates, store, addComponentToNode } from '../store.js'
 import { ALL } from '../core/registry/index.js'
 

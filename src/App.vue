@@ -1,4 +1,6 @@
 <script setup>
+
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 import { onMounted, onBeforeUnmount, watch } from 'vue'
 import { store, initApp, saveWorld, toggleLeft, toggleRight } from './store.js'
 import TopBar from './components/TopBar.vue'

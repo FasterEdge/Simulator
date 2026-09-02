@@ -1,4 +1,6 @@
 <script setup>
+
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 import { computed, ref, watch } from 'vue'
 import { store, execCommand } from '../store.js'
 import { ALL } from '../core/registry/index.js'

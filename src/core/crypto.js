@@ -1,3 +1,4 @@
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 // 模拟用的密码学工具：HMAC-SHA256（WebCrypto）、指纹、随机
 const encoder = new TextEncoder()
 

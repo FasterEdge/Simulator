@@ -1,3 +1,4 @@
+// FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 // 与 FasterEdge types/errors.go 对应的模拟错误常量
 export const ErrText = {
   NilAtom: 'atom is nil',
