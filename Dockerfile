@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # 多阶段构建：node 编译 → nginx 托管静态产物（约 25MB）
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
