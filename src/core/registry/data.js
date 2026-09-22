@@ -7,7 +7,7 @@ import { ok, fail, invalid } from '../errors.js'
 import { randomHex, sha256Hex } from '../crypto.js'
 
 // 与 package.json 保持一致（Vite 构建时可被替换，运行时读不到 json，这里显式维护）
-const VERSION = '1.0.20260901'
+const VERSION = '1.0.20260922'
 
 const LOGO = `
  _______ _______ _______ _______ _______  ______ _______ ______   ______ _______
