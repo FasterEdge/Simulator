@@ -1,6 +1,6 @@
 {
   "name": "fasteredge-simulator",
-  "version": "1.0.20261022",
+  "version": "1.0.20261116",
   "description": "FasterEdge 纯前端离线模拟编排与测试工具（拓扑拖拽 + Ability/Data 组件 + 命令控制台）",
   "author": "FasterEdge <fasteredge@mutantcat.org>",
   "repository": {
@@ -25,10 +25,10 @@
     "@vue-flow/core": "^1.48.2",
     "@vue-flow/minimap": "^1.5.4",
     "html-to-image": "^1.11.13",
-    "vue": "^3.5.42"
+    "vue": "^3.5.45"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^6.0.8",
-    "vite": "^8.3.4"
+    "@vitejs/plugin-vue": "^6.0.11",
+    "vite": "^8.3.8"
   }
 }
