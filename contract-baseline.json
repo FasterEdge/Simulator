@@ -1,0 +1,16 @@
+{
+  "counts": {
+    "goComponents": 31,
+    "simComponents": 31,
+    "goCommands": 226,
+    "simCommands": 226
+  },
+  "byKind": {
+    "missingCommand": 0,
+    "extraCommand": 17,
+    "argNameDiff": 210,
+    "requiredDiff": 0,
+    "shapeDiff": 6
+  },
+  "total": 233
+}

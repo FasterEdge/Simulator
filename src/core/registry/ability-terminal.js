@@ -1,6 +1,24 @@
 // FasterEdge 开源项目 - Github: https://github.com/FasterEdge - Gitee: https://gitee.com/FasterEdge
 import { ok, fail, invalid, unsupported } from '../errors.js'
 import { randomToken } from '../crypto.js'
+import { topologyPath } from '../world.js'
+import { trimStr } from '../netpolicy.js'
+
+// 对齐主仓库 isValidAbsoluteRemotePath：远端路径必须以 "/" 开头、
+// 无 ".." 段、无 Windows 反斜杠分隔符（防远端写路径穿越）
+function validRemotePath(p) {
+  const s = String(p ?? '')
+  if (!s || !s.startsWith('/')) return false
+  if (s.includes(String.fromCharCode(92))) return false
+  return s.split('/').every((seg) => seg !== '..')
+}
+
+// 对齐主仓库 isValidAlgDistComponent：≤128，仅 [a-zA-Z0-9._-]
+function validComponentName(s) {
+  const v = String(s ?? '')
+  if (!v || v.length > 128) return false
+  return /^[a-zA-Z0-9._-]+$/.test(v)
+}
 
 // 简易 Shell：模拟常用命令输出，支持节点虚拟文件系统
 function simulateShell(node, cmdline) {
@@ -57,7 +75,7 @@ function makeCmdAbility(name, describe, wrapper) {
     category: '终端',
     describe,
     deps: ['BaseData'],
-    initState: () => ({ jobs: {}, allowlist: [...DEFAULT_ALLOWLIST], seq: 1 }),
+    initState: () => ({ jobs: {}, allowlist: [...DEFAULT_ALLOWLIST], allowAny: false, seq: 1 }),
     commands: {
       run: {
         describe: '运行命令并等待结果',
@@ -65,7 +83,7 @@ function makeCmdAbility(name, describe, wrapper) {
         handler: async (ctx, a, s) => {
           const cmd = String(a.Command || '').trim()
           if (!cmd) return fail(invalid('command empty'))
-          const allowed = checkAllowlist(s.allowlist, cmd)
+          const allowed = s.allowAny === true || checkAllowlist(s.allowlist, cmd)
           if (!allowed) return fail(invalid(`command not allowed by allowlist: ${cmd}`))
           const line = wrapper ? `${wrapper} "${cmd}"` : cmd
           const res = simulateShell(ctx.node, cmd)
@@ -78,7 +96,7 @@ function makeCmdAbility(name, describe, wrapper) {
         handler: async (ctx, a, s) => {
           const cmd = String(a.Command || '').trim()
           if (!cmd) return fail(invalid('command empty'))
-          const allowed = checkAllowlist(s.allowlist, cmd)
+          const allowed = s.allowAny === true || checkAllowlist(s.allowlist, cmd)
           if (!allowed) return fail(invalid(`command not allowed by allowlist: ${cmd}`))
           const id = `job-${s.seq++}`
           const res = simulateShell(ctx.node, cmd)
@@ -146,7 +164,21 @@ function makeCmdAbility(name, describe, wrapper) {
         args: [{ key: 'Commands', label: '白名单数组', type: 'json' }],
         handler: async (ctx, a, s) => {
           s.allowlist = Array.isArray(a.Commands) ? a.Commands.map(String) : []
+          // 对齐主仓库 SetAllowlist：显式设表即退出"允许任意"模式
+          s.allowAny = false
           return ok([...s.allowlist])
+        },
+      },
+      // 对齐主仓库 CmdCommandSetAllowAny / ShCommandSetAllowAny /
+      // BashCommandSetAllowAny：白名单为空时 fail-closed 拒绝一切执行，
+      // 必须显式 opt-in 才能全放行（主仓库把"空表=放行"当授权洞修掉了）。
+      set_allowlist_any: {
+        describe: '显式打开/关闭"允许任意命令"（opt-in，关闭时清空白名单）',
+        args: [{ key: 'Any', label: '是否放行任意命令', type: 'bool', required: true }],
+        handler: async (ctx, a, s) => {
+          s.allowAny = a.Any === true || a.Any === 'true' || a.Any === 1 || a.Any === '1'
+          if (!s.allowAny) s.allowlist = []
+          return ok(s.allowAny)
         },
       },
       get_allowlist: {
@@ -249,10 +281,14 @@ export const FileTransferAbility = {
   initState: () => ({ target: '', transfers: {}, seq: 1 }),
   commands: {
     set_target: {
-      describe: '设置目标节点地址',
-      args: [{ key: 'Address', label: '目标地址', type: 'string', required: true }],
+      describe: '设置目标节点（须能在拓扑中解析到）',
+      args: [{ key: 'Address', label: '目标节点', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        s.target = String(a.Address || '').trim()
+        // 对齐主仓库 set_target：PeerName 必填且必须能解析为拓扑中的对端
+        const t = trimStr(a.Address)
+        if (!t) return fail(invalid('target empty'))
+        if (!resolveTarget(ctx, t)) return fail(invalid(`target "${t}" not found in topology`))
+        s.target = t
         return ok(s.target)
       },
     },
@@ -262,38 +298,61 @@ export const FileTransferAbility = {
       handler: async (ctx, a, s) => ok(s.target),
     },
     upload: {
-      describe: '上传文件到目标节点（写入目标虚拟 FS）',
+      describe: '上传文件到目标节点（写入目标虚拟 FS；要求拓扑连通）',
       args: [
         { key: 'RemotePath', label: '远端路径', type: 'string', required: true },
         { key: 'Content', label: '内容', type: 'textarea' },
       ],
       handler: async (ctx, a, s) => {
-        const target = resolveTarget(ctx, s.target)
-        if (!target) return fail(invalid('target not found in topology'))
+        const resolved = resolveReachableTarget(ctx, s, s.target)
+        if (resolved.err) return fail(invalid(resolved.err))
+        // 对齐主仓库 upload：remote 路径必须绝对且无 ".." 段
+        const remote = String(a.RemotePath ?? '')
+        if (!validRemotePath(remote)) return fail(invalid('remote path must be absolute without traversal'))
+        const target = resolved.target
         const id = `ft-${s.seq++}`
         if (!target.fs) target.fs = {}
-        target.fs[a.RemotePath] = String(a.Content || '')
+        target.fs[remote] = String(a.Content || '')
+        const now = ctx.world.clock.now()
         s.transfers[id] = {
           id,
           direction: 'upload',
-          remotePath: a.RemotePath,
+          remotePath: remote,
           target: s.target,
+          hops: resolved.path.length - 1,
           status: 'completed',
           progress: 100,
-          createdAt: Date.now(),
-          completedAt: Date.now(),
+          createdAt: now,
+          completedAt: now,
         }
-        return ok({ id, remotePath: a.RemotePath, target: s.target, status: 'completed' })
+        return ok({
+          id, remotePath: remote, target: s.target,
+          hops: resolved.path.length - 1, path: resolved.path, status: 'completed',
+        })
       },
     },
     download: {
-      describe: '从目标节点下载文件',
+      describe: '从目标节点下载文件（要求拓扑连通）',
       args: [{ key: 'RemotePath', label: '远端路径', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const target = resolveTarget(ctx, s.target)
-        if (!target) return fail(invalid('target not found in topology'))
-        if (!target.fs || !(a.RemotePath in target.fs)) return fail(invalid(`remote file "${a.RemotePath}" not found`))
-        return ok({ remotePath: a.RemotePath, content: target.fs[a.RemotePath] })
+        const resolved = resolveReachableTarget(ctx, s, s.target)
+        if (resolved.err) return fail(invalid(resolved.err))
+        // 对齐主仓库 download：remote 路径必须绝对且无 ".." 段
+        const remote = String(a.RemotePath ?? '')
+        if (!validRemotePath(remote)) return fail(invalid('remote path must be absolute without traversal'))
+        const target = resolved.target
+        if (!target.fs || !(remote in target.fs)) return fail(invalid(`remote file "${remote}" not found`))
+        return ok({ remotePath: remote, content: target.fs[remote], hops: resolved.path.length - 1 })
+      },
+    },
+    check_link: {
+      describe: '检查到目标的拓扑连通性（返回路径与跳数，不连通则报错）',
+      args: [{ key: 'Target', label: '目标节点（默认用 set_target 的值）', type: 'string' }],
+      handler: async (ctx, a, s) => {
+        const want = a.Target ? String(a.Target).trim() : s.target
+        const resolved = resolveReachableTarget(ctx, s, want)
+        if (resolved.err) return fail(invalid(resolved.err))
+        return ok({ target: resolved.target.name, hops: resolved.path.length - 1, path: resolved.path, connected: true })
       },
     },
     list: {
@@ -306,8 +365,11 @@ export const FileTransferAbility = {
       describe: '获取传输记录详情',
       args: [{ key: 'Id', label: '传输 ID', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const t = s.transfers[a.Id]
-        if (!t) return fail(invalid(`transfer "${a.Id}" not found`))
+        // 对齐主仓库：ID trim 后非空
+        const id = trimStr(a.Id)
+        if (!id) return fail(invalid('transfer id empty'))
+        const t = s.transfers[id]
+        if (!t) return fail(invalid(`transfer "${id}" not found`))
         return ok({ ...t, createdAt: new Date(t.createdAt).toISOString(), completedAt: t.completedAt ? new Date(t.completedAt).toISOString() : null })
       },
     },
@@ -315,8 +377,10 @@ export const FileTransferAbility = {
       describe: '取消传输',
       args: [{ key: 'Id', label: '传输 ID', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const t = s.transfers[a.Id]
-        if (!t) return fail(invalid(`transfer "${a.Id}" not found`))
+        const id = trimStr(a.Id)
+        if (!id) return fail(invalid('transfer id empty'))
+        const t = s.transfers[id]
+        if (!t) return fail(invalid(`transfer "${id}" not found`))
         t.status = 'canceled'
         return ok({ id: t.id, status: 'canceled' })
       },
@@ -353,6 +417,18 @@ function resolveTarget(ctx, target) {
   return null
 }
 
+// 拓扑连通性约束：目标节点必须能通过 world.links 从源节点到达。
+// 返回 { target, path } 或 { err }，错误文案带上两端与"未连线"原因，便于论文里做可复现的失败案例。
+function resolveReachableTarget(ctx, s, target) {
+  const t = resolveTarget(ctx, target)
+  if (!t) return { err: `target "${target || ''}" not found in topology` }
+  const path = topologyPath(ctx.world, ctx.node.id, t.id)
+  if (!path) {
+    return { err: `no link path from "${ctx.node.name}" to "${t.name}" in topology (add a link between them first)` }
+  }
+  return { target: t, path }
+}
+
 // ============================================================
 // AlgorithmDistributionAbility（基于 FileTransfer 的算法分发）
 // ============================================================
@@ -365,16 +441,22 @@ export const AlgorithmDistributionAbility = {
   initState: () => ({ algorithms: {}, distributions: {}, seq: 1 }),
   commands: {
     register_algorithm: {
-      describe: '注册算法',
+      describe: '注册算法（name/version 均必填）',
       args: [
         { key: 'Name', label: '算法名', type: 'string', required: true },
-        { key: 'Version', label: '版本', type: 'string' },
+        { key: 'Version', label: '版本', type: 'string', required: true },
         { key: 'Payload', label: '算法内容', type: 'textarea' },
       ],
       handler: async (ctx, a, s) => {
-        const name = String(a.Name || '').trim()
-        if (!name) return fail(invalid('name empty'))
-        s.algorithms[name] = { name, version: String(a.Version || '').trim() || 'v1', payload: String(a.Payload || '') }
+        // 对齐主仓库 register_algorithm：name/version 均必填且走字符白名单
+        // （旧实现 version 缺省回落 'v1'，与 Go 的"version 必填"不一致）
+        const name = trimStr(a.Name)
+        const version = trimStr(a.Version)
+        if (!name || !version) return fail(invalid('name/version/source required'))
+        if (!validComponentName(name) || !validComponentName(version)) {
+          return fail(invalid(`invalid algorithm name/version "${name}"/"${version}"`))
+        }
+        s.algorithms[name] = { name, version, payload: String(a.Payload || '') }
         return ok(s.algorithms[name])
       },
     },
@@ -382,7 +464,8 @@ export const AlgorithmDistributionAbility = {
       describe: '注销算法',
       args: [{ key: 'Name', label: '算法名', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const name = String(a.Name || '').trim()
+        const name = trimStr(a.Name)
+        if (!name) return fail(invalid('name empty'))
         if (!s.algorithms[name]) return fail(invalid(`algorithm "${name}" not found`))
         const alg = s.algorithms[name]
         delete s.algorithms[name]
@@ -398,38 +481,49 @@ export const AlgorithmDistributionAbility = {
       describe: '获取算法详情',
       args: [{ key: 'Name', label: '算法名', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const alg = s.algorithms[String(a.Name || '').trim()]
+        const name = trimStr(a.Name)
+        if (!name) return fail(invalid('name empty'))
+        const alg = s.algorithms[name]
         if (!alg) return fail(invalid('algorithm not found'))
         return ok(alg)
       },
     },
     distribute: {
-      describe: '分发算法到目标节点',
+      describe: '分发算法到目标节点（要求拓扑连通）',
       args: [
         { key: 'Algorithm', label: '算法名', type: 'string', required: true },
         { key: 'Target', label: '目标节点', type: 'string', required: true },
       ],
       handler: async (ctx, a, s) => {
-        const alg = s.algorithms[String(a.Algorithm || '').trim()]
+        // 对齐主仓库 distribute：name/version/target 均必填
+        const algName = trimStr(a.Algorithm)
+        if (!algName) return fail(invalid('algorithm name empty'))
+        const alg = s.algorithms[algName]
         if (!alg) return fail(invalid('algorithm not found'))
-        const target = resolveTarget(ctx, String(a.Target || '').trim())
-        if (!target) return fail(invalid('target not found in topology'))
+        const wantTarget = trimStr(a.Target)
+        if (!wantTarget) return fail(invalid('target empty'))
+        const resolved = resolveReachableTarget(ctx, s, wantTarget)
+        if (resolved.err) return fail(invalid(resolved.err))
+        const target = resolved.target
         if (!target.fs) target.fs = {}
         const id = `ad-${s.seq++}`
         const path = `/algorithms/${alg.name}-${alg.version}.json`
         target.fs[path] = JSON.stringify(alg)
+        const now = ctx.world.clock.now()
         s.distributions[id] = {
-          id, algorithm: alg.name, target: String(a.Target).trim(), path, status: 'completed', createdAt: Date.now(), completedAt: Date.now(),
+          id, algorithm: alg.name, target: wantTarget, path, status: 'completed', createdAt: now, completedAt: now,
         }
-        return ok({ id, algorithm: alg.name, target: String(a.Target).trim(), path, status: 'completed' })
+        return ok({ id, algorithm: alg.name, target: wantTarget, path, hops: resolved.path.length - 1, status: 'completed' })
       },
     },
     cancel: {
       describe: '取消分发',
       args: [{ key: 'Id', label: '分发 ID', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const d = s.distributions[a.Id]
-        if (!d) return fail(invalid(`distribution "${a.Id}" not found`))
+        const id = trimStr(a.Id)
+        if (!id) return fail(invalid('distribution id empty'))
+        const d = s.distributions[id]
+        if (!d) return fail(invalid(`distribution "${id}" not found`))
         d.status = 'canceled'
         return ok({ id: d.id, status: 'canceled' })
       },

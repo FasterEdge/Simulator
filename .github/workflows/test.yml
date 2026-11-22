@@ -1,0 +1,57 @@
+name: '离线测试'
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: '引擎冒烟 + trace 录制回放 + 序列化往返'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: '安装前端依赖'
+        run: npm ci --no-audit --no-fund
+
+      - name: '核心引擎冒烟测试（smoke.mjs）'
+        run: node smoke.mjs
+
+      - name: 'trace 录制 / 回放与序列化往返断言（test/）'
+        run: node --test
+
+      - name: 'trace CLI 端到端（record → JSON → replay）'
+        run: |
+          set -euo pipefail
+          node scripts/trace.mjs record --scenario 0 --out .trace-mqtt.json
+          node scripts/trace.mjs replay .trace-mqtt.json
+          node scripts/trace.mjs record --scenario 1 --out .trace-onekey.json
+          node scripts/trace.mjs replay .trace-onekey.json
+          node scripts/trace.mjs record --scenario 2 --out .trace-config.json
+          node scripts/trace.mjs replay .trace-config.json
+
+      - name: '生产构建'
+        run: npm run build
+
+      - name: '上传 trace 工件'
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: simulator-trace-${{ github.run_id }}
+          path: |
+            .trace-mqtt.json
+            .trace-onekey.json
+            .trace-config.json
+          if-no-files-found: 'warn'
+          retention-days: 7

@@ -17,7 +17,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node smoke.mjs && node --test",
+    "test:trace": "node --test"
   },
   "dependencies": {
     "@vue-flow/background": "^1.3.2",

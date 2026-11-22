@@ -9,6 +9,8 @@ export function serializeWorld(world) {
   return {
     name: world.name,
     clockOffsetMs: world.clockOffsetMs,
+    // 模拟时钟状态（offset / 推进量 / 倍率 / 冻结），保证 hydrate 后时钟不丢失
+    clock: world.clock ? world.clock.snapshot() : null,
     nodes: world.nodes.map((n) => ({
       id: n.id,
       name: n.name,
@@ -22,6 +24,8 @@ export function serializeWorld(world) {
       abilities: JSON.parse(JSON.stringify(n.abilities || {})),
     })),
     links: world.links.map((l) => ({ id: l.id, source: l.source, target: l.target })),
+    // Broker 运行时状态（packetSeq / 留存 / inflight / 统计），保证 hydrate 后 MQTT 行为可复现
+    broker: world.broker ? world.broker.snapshot() : null,
     scenarios: JSON.parse(JSON.stringify(world.scenarios || [])),
     // 只持久化最近 200 条日志，避免 localStorage 膨胀与每次序列化开销
     logs: (world.logs || []).slice(-200).map((l) => ({
@@ -60,6 +64,11 @@ export function hydrateWorld(obj) {
     if (m) maxNodeNum = Math.max(maxNodeNum, Number(m[1]))
   }
   setIdCounter(maxNodeNum + 1)
+  // 重建连线：只保留两端都存在的连线，避免导入残缺 JSON 后画出悬空边
+  const nodeIds = new Set(world.nodes.map((n) => n.id))
+  world.links = (obj?.links || [])
+    .filter((l) => l && nodeIds.has(l.source) && nodeIds.has(l.target))
+    .map((l) => ({ id: l.id, source: l.source, target: l.target }))
   // 步骤归一化：缺 expect/args 时补默认，避免 UI 渲染崩溃
   world.scenarios = (obj?.scenarios || []).map((sc) => ({
     ...sc,
@@ -72,11 +81,17 @@ export function hydrateWorld(obj) {
   world.logs = (obj?.logs || []).map((l) => ({ ts: l.ts || 0, ...l })).slice(-2000)
   // 重建世界 Broker：连接会话与订阅（跨节点 MQTT 路由依赖它）
   world.broker.clear()
+  // 恢复 Broker 运行时状态（packetSeq / 留存 / inflight / 统计）；旧文件无 broker 字段时
+  // 由下方按节点 MQTTAbility 重建订阅与连接，行为与旧版一致
+  world.broker.restore(obj?.broker || null)
+  // 恢复模拟时钟状态（offset / 推进量 / 倍率 / 冻结）；旧文件无 clock 字段时退回 offset
+  world.clock.restore(obj?.clock || { offsetMs: obj?.clockOffsetMs || 0 })
   for (const n of world.nodes) {
     const mqtt = n.abilities?.MQTTAbility
     if (mqtt) {
-      if (mqtt.connected) world.broker.connect(n.id, mqtt.broker, mqtt.clientId)
-      if (Array.isArray(mqtt.subscriptions) && mqtt.subscriptions.length) {
+      // 旧格式（无 broker 快照）下按节点状态重建会话与订阅
+      if (!obj?.broker && mqtt.connected) world.broker.connect(n.id, mqtt.broker, mqtt.clientId)
+      if (!obj?.broker && Array.isArray(mqtt.subscriptions) && mqtt.subscriptions.length) {
         world.broker.subs[n.id] = mqtt.subscriptions.map((s) => ({ topic: s.topic, qos: s.qos }))
       }
     }
@@ -150,7 +165,7 @@ export function buildExampleWorld() {
   // 预置：NetMap 对端 + MQTT 订阅/连接，方便开箱即玩
   const nm1 = edge1.abilities.NetMapAbility
   if (nm1) {
-    nm1.peers['cloud-ctl'] = { name: 'cloud-ctl', address: '10.0.0.1:7000', role: 'cloud', lastSeen: Date.now() }
+    nm1.peers['cloud-ctl'] = { name: 'cloud-ctl', address: '10.0.0.1:7000', role: 'cloud', lastSeen: w.clock.now() }
   }
   const mq2 = edge2.abilities.MQTTAbility
   if (mq2) {

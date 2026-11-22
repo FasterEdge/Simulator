@@ -2,24 +2,48 @@
 import { ok, fail, invalid, unsupported } from '../errors.js'
 import { randomHex, randomToken, hmacSignBase64Url, strToBytes } from '../crypto.js'
 import { KeyringData } from './data.js'
+import { trimStr, splitHostPort, isAcceptableHostname, isDialableHost, isIpLiteral, stripBrackets } from '../netpolicy.js'
 const keyringCommands = KeyringData.commands
 
-// 与主仓库一致：允许 host:port / 纯 IP / 主机名（不含协议前缀、不含路径、不含非法字符）
+// 与主仓库 isValidPeerAddress 一致：允许 host:port / 纯 IP / 主机名。
+// IP 字面量拒绝回环/未指定/组播/链路本地（SSRF 面）；主机名拒绝尾点 localhost、
+// *.localhost 与"看起来像 IPv4 但解析不了"的歧义数字写法（127.1、0x7f.0.0.1）。
+// 私网（10.x/192.168.x）是合法 edge 内网地址，放行。
 function validPeerAddress(addr) {
-  if (!addr || typeof addr !== 'string' || !addr) return false
-  if (/[\s/\\?#]/.test(addr)) return false
-  // host:port 形式：要求 host 非空、端口为 1-65535 数字
-  const ci = addr.lastIndexOf(':')
-  if (ci > 0) {
-    const host = addr.slice(0, ci)
-    const port = addr.slice(ci + 1)
-    if (!host || !/^\d{1,5}$/.test(port)) return false
-    const pn = Number(port)
-    if (!(pn >= 1 && pn <= 65535)) return false
-    return true
+  const s = trimStr(addr)
+  if (!s) return false
+  if (/[\s/\\?#]/.test(s)) return false
+  let host = s
+  const sp = splitHostPort(s)
+  if (sp) {
+    host = sp.host
+  } else if (s.indexOf(':') !== s.lastIndexOf(':')) {
+    // IPv6 字面量（多个冒号）：无端口，直接按字面量处理
+    host = stripBrackets(s)
   }
-  // 纯 IP 或主机名：仅允许字母数字、点、连字符、下划线
-  return /^[a-zA-Z0-9._-]+$/.test(addr)
+  if (!host) return false
+  if (isIpLiteral(host)) return isDialableHost(host, { allowPrivate: true })
+  return isAcceptableHostname(host)
+}
+
+// 角色白名单（对齐主仓库 RoleAbility validRoles：仅 cloud/edge）
+const VALID_ROLES = ['cloud', 'edge']
+
+// 网络地址可接受（host 形式）：http/https 之外的 scheme 由调用方先约束
+function acceptableHttpHost(host, { allowPrivate = true } = {}) {
+  if (!host) return false
+  if (isIpLiteral(host)) return isDialableHost(host, { allowPrivate })
+  return isAcceptableHostname(host)
+}
+
+// 提取 url 的 host 并做回环/私网门控；false 表示不可接受
+function urlHostAcceptable(raw, { allowPrivate = true, scheme = ['http', 'https'] } = {}) {
+  const url = trimStr(raw)
+  const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)/.exec(url)
+  if (!m || !scheme.includes(m[1].toLowerCase())) return false
+  const hostport = m[2]
+  if (!hostport || hostport.includes('@')) return false // 拒绝 userinfo
+  return acceptableHttpHost(stripBrackets(splitHostPort(hostport)?.host || hostport.split(':')[0]) || hostport, { allowPrivate })
 }
 
 function nowIso() {
@@ -67,11 +91,13 @@ export const RoleAbility = {
       handler: async (ctx, a, s) => ok('提供角色管理的能力。'),
     },
     set_role: {
-      describe: '设置节点角色（如 cloud / edge / sensor）',
+      describe: '设置节点角色（cloud / edge）',
       args: [{ key: 'Role', label: '角色', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        if (!String(a.Role || '').trim()) return fail(invalid('role empty'))
-        s.role = String(a.Role).trim()
+        const role = trimStr(a.Role)
+        if (!role) return fail(invalid('role empty'))
+        if (!VALID_ROLES.includes(role)) return fail(invalid(`role must be "cloud" or "edge", got "${role}"`))
+        s.role = role
         return ok('角色设置成功')
       },
     },
@@ -86,6 +112,23 @@ export const RoleAbility = {
 // ============================================================
 // CloudRoleAbility（依赖 RoleAbility 且 role=cloud）
 // ============================================================
+// 对齐主仓库 normalizeStatus：大小写/空白不敏感，未知值返回 '' 由调用方拒绝
+function normalizeCloudStatus(raw) {
+  switch (trimStr(raw).toLowerCase()) {
+    case 'healthy':
+    case 'ok':
+    case 'up':
+      return 'healthy'
+    case 'degraded':
+      return 'degraded'
+    case 'offline':
+    case 'down':
+      return 'offline'
+    default:
+      return ''
+  }
+}
+
 export const CloudRoleAbility = {
   name: 'CloudRoleAbility',
   kind: 'ability',
@@ -93,7 +136,7 @@ export const CloudRoleAbility = {
   describe: 'CloudRoleAbility 提供云端控制面能力：服务注册、状态上报与心跳。',
   deps: ['BaseData', 'RoleAbility'],
   _requireRole: 'cloud',
-  initState: () => ({ controller: '', services: {}, status: 'online', lastHeartbeat: null }),
+  initState: () => ({ controller: '', services: {}, status: 'unknown', lastHeartbeat: null }),
   commands: {
     describe: {
       describe: '返回能力描述',
@@ -106,7 +149,13 @@ export const CloudRoleAbility = {
       handler: async (ctx, a, s) => {
         const role = ctx.node.abilities.RoleAbility?.role
         if (role !== 'cloud') return fail(invalid('requires role=cloud'))
-        s.controller = String(a.Address).trim()
+        const url = trimStr(a.Address)
+        if (!url) return fail(invalid('empty url'))
+        // 对齐主仓库 isAcceptableControllerURL：http/https、无 userinfo、host 非空、拒绝回环
+        if (!urlHostAcceptable(url, { allowPrivate: true, scheme: ['http', 'https'] })) {
+          return fail(invalid(`invalid controller url "${url}"`))
+        }
+        s.controller = url
         return ok(s.controller)
       },
     },
@@ -123,8 +172,18 @@ export const CloudRoleAbility = {
       ],
       handler: async (ctx, a, s) => {
         if (ctx.node.abilities.RoleAbility?.role !== 'cloud') return fail(invalid('requires role=cloud'))
-        s.services[String(a.Name).trim()] = { name: String(a.Name).trim(), address: String(a.Address).trim(), status: 'registered' }
-        return ok(s.services[String(a.Name).trim()])
+        // 对齐主仓库：name 1..128 且 trim 后等于原文；version/endpoint 长度上限；服务数 ≤512
+        const nameRaw = String(a.Name ?? '').trim()
+        if (!nameRaw || nameRaw.length > 128 || a.Name !== undefined && String(a.Name) !== nameRaw) {
+          return fail(invalid('service name must be 1-128 chars'))
+        }
+        const addr = trimStr(a.Address)
+        if (!addr || addr.length > 512) return fail(invalid('service address too long'))
+        if (!s.services[nameRaw] && Object.keys(s.services).length >= 512) {
+          return fail(invalid('service limit 512 reached'))
+        }
+        s.services[nameRaw] = { name: nameRaw, address: addr, status: 'registered' }
+        return ok(s.services[nameRaw])
       },
     },
     unregister_service: {
@@ -144,10 +203,13 @@ export const CloudRoleAbility = {
       handler: async (ctx, a, s) => ok(Object.values(s.services)),
     },
     set_status: {
-      describe: '设置云节点状态',
-      args: [{ key: 'Status', label: '状态', type: 'select', options: ['online', 'degraded', 'offline'] }],
+      describe: '设置云节点状态（healthy/ok/up、degraded、offline/down）',
+      args: [{ key: 'Status', label: '状态', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        s.status = a.Status || 'online'
+        // 对齐主仓库 normalizeStatus：未知值拒绝，不做静默回落
+        const st = normalizeCloudStatus(a.Status)
+        if (!st) return fail(invalid(`invalid status "${String(a.Status)}"`))
+        s.status = st
         return ok(s.status)
       },
     },
@@ -190,7 +252,9 @@ export const EdgeRoleAbility = {
       args: [{ key: 'Zone', label: '区域', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
         if (ctx.node.abilities.RoleAbility?.role !== 'edge') return fail(invalid('requires role=edge'))
-        s.zone = String(a.Zone).trim()
+        const zone = trimStr(a.Zone)
+        if (!zone || zone.length > 64) return fail(invalid('zone must be 1-64 chars'))
+        s.zone = zone
         return ok(s.zone)
       },
     },
@@ -204,7 +268,12 @@ export const EdgeRoleAbility = {
       args: [{ key: 'Name', label: '能力名', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
         if (ctx.node.abilities.RoleAbility?.role !== 'edge') return fail(invalid('requires role=edge'))
-        const name = String(a.Name).trim()
+        const name = trimStr(a.Name)
+        if (!name || name.length > 128) return fail(invalid('capability must be 1-128 chars'))
+        // 对齐主仓库：达上限时仅允许更新已存在项（去重插入不增长），新条目拒绝
+        if (!s.capabilities.includes(name) && s.capabilities.length >= 256) {
+          return fail(invalid('capability limit 256 reached'))
+        }
         if (!s.capabilities.includes(name)) s.capabilities.push(name)
         return ok(name)
       },
@@ -213,7 +282,7 @@ export const EdgeRoleAbility = {
       describe: '移除能力',
       args: [{ key: 'Name', label: '能力名', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const name = String(a.Name).trim()
+        const name = trimStr(a.Name)
         const i = s.capabilities.indexOf(name)
         if (i < 0) return fail(invalid(`capability "${name}" not found`))
         s.capabilities.splice(i, 1)
@@ -230,7 +299,14 @@ export const EdgeRoleAbility = {
       args: [{ key: 'Names', label: '能力名数组', type: 'json' }],
       handler: async (ctx, a, s) => {
         const arr = Array.isArray(a.Names) ? a.Names : []
-        s.capabilities = arr.map(String)
+        // 对齐主仓库 set_capabilities：逐项 1..128 字符、总数 ≤256
+        if (arr.length > 256) return fail(invalid('capability list exceeds 256'))
+        for (const c of arr) {
+          if (typeof c !== 'string' || !c.trim() || c.trim().length > 128) {
+            return fail(invalid('capability must be 1-128 chars'))
+          }
+        }
+        s.capabilities = arr.map((c) => c.trim())
         return ok([...s.capabilities])
       },
     },
@@ -238,7 +314,10 @@ export const EdgeRoleAbility = {
       describe: '记录一次延迟采样(ms)',
       args: [{ key: 'LatencyMs', label: '延迟(ms)', type: 'number', required: true }],
       handler: async (ctx, a, s) => {
-        s.latency.push(Number(a.LatencyMs))
+        // 对齐主仓库：负延迟拒绝（负值会让聚合指标失去物理意义）
+        const v = Number(a.LatencyMs)
+        if (!Number.isFinite(v) || v < 0) return fail(invalid('latency must be non-negative'))
+        s.latency.push(v)
         if (s.latency.length > 100) s.latency.shift()
         return ok(s.latency.length)
       },
@@ -283,50 +362,56 @@ export const TimeAbility = {
   initState: () => ({ offsetMs: 0, lastSync: null, source: 'system' }),
   commands: {
     sync_manual: {
-      describe: '手动指定时间（ISO 字符串或 unix 秒）',
+      describe: '手动指定本节点时间（ISO 字符串或 unix 秒）：写入节点相对世界时钟的偏移量',
       args: [{ key: 'Value', label: '时间值', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
         const v = String(a.Value).trim()
         const t = /^\d+$/.test(v) ? new Date(Number(v) * 1000) : new Date(v)
         if (Number.isNaN(t.getTime())) return fail(invalid('cannot parse time'))
-        s.offsetMs = t.getTime() - Date.now()
+        // 文档语义："世界时钟 + 偏移量"：世界时钟是权威源，这里只改本节点的偏差
+        s.offsetMs = t.getTime() - ctx.world.clock.now()
         s.source = 'manual'
-        s.lastSync = Date.now()
+        s.lastSync = ctx.world.clock.now()
         return ok({ time: t.toISOString(), offsetMs: s.offsetMs, source: s.source })
       },
     },
     sync_system: {
-      describe: '与系统时间对齐（重置偏移）',
+      describe: '与本节点系统时间对齐（节点偏移清零，世界时钟不动）',
       args: [],
       handler: async (ctx, a, s) => {
         s.offsetMs = 0
         s.source = 'system'
-        s.lastSync = Date.now()
-        return ok({ time: new Date().toISOString(), offsetMs: 0, source: s.source })
+        s.lastSync = ctx.world.clock.now()
+        return ok({ time: ctx.world.clock.nowIso(), offsetMs: 0, source: s.source })
       },
     },
     sync_net: {
       describe: '从网络时间源同步（模拟成功，拒绝本地地址）',
       args: [{ key: 'URL', label: '时间源 URL', type: 'string' }],
       handler: async (ctx, a, s) => {
-        const url = String(a.URL || 'https://timeapi.io/api/Time/current/zone?timeZone=Asia/Shanghai')
-        if (/^(localhost|127\.|0\.0\.0\.0|::1)/.test(url)) return fail(invalid('address not allowed'))
+        const url = trimStr(a.URL) || 'https://timeapi.io/api/Time/current/zone?timeZone=Asia/Shanghai'
+        // 对齐主仓库 networkPolicy：http/https、拒绝回环/未指定/组播/链路本地
+        if (!urlHostAcceptable(url, { allowPrivate: true, scheme: ['http', 'https'] })) {
+          return fail(invalid('address not allowed'))
+        }
         s.offsetMs = 0
         s.source = 'network'
-        s.lastSync = Date.now()
-        return ok({ time: new Date().toISOString(), offsetMs: 0, source: s.source, url })
+        s.lastSync = ctx.world.clock.now()
+        return ok({ time: ctx.world.clock.nowIso(), offsetMs: 0, source: s.source, url })
       },
     },
     sync_ntp: {
       describe: '从 NTP 服务器同步（模拟成功，拒绝本地地址）',
       args: [{ key: 'Address', label: 'NTP 服务器', type: 'string' }],
       handler: async (ctx, a, s) => {
-        const addr = String(a.Address || 'pool.ntp.org')
-        if (/^(localhost|127\.|0\.0\.0\.0|::1)/.test(addr)) return fail(invalid('address not allowed'))
+        const addr = trimStr(a.Address) || 'pool.ntp.org'
+        if (!isDialableHost(stripBrackets(splitHostPort(addr)?.host || addr.split(':')[0]), { allowPrivate: true })) {
+          return fail(invalid('address not allowed'))
+        }
         s.offsetMs = 0
         s.source = 'ntp'
-        s.lastSync = Date.now()
-        return ok({ time: new Date().toISOString(), offsetMs: 0, source: s.source, server: addr })
+        s.lastSync = ctx.world.clock.now()
+        return ok({ time: ctx.world.clock.nowIso(), offsetMs: 0, source: s.source, server: addr })
       },
     },
     last: {
@@ -338,7 +423,51 @@ export const TimeAbility = {
     get_time: {
       describe: '读取当前（模拟）时间',
       args: [],
-      handler: async (ctx, a, s) => ok(new Date(Date.now() + s.offsetMs).toISOString()),
+      handler: async (ctx, a, s) => ok(new Date(ctx.world.clock.now() + s.offsetMs).toISOString()),
+    },
+    // ===== 世界时钟推进 API（整体偏移 / 手动推进 / 快进 / 冻结 / 复位） =====
+    set_offset: {
+      describe: '设置世界时钟相对系统时间的整体偏移（毫秒）',
+      args: [{ key: 'OffsetMs', label: '偏移(ms)', type: 'number', required: true }],
+      handler: async (ctx, a, s) => {
+        if (!Number.isFinite(a.OffsetMs)) return fail(invalid('offset must be a finite number'))
+        const snap = ctx.world.clock.setOffset(a.OffsetMs)
+        return ok({ ...snap, time: new Date(snap.time).toISOString() })
+      },
+    },
+    advance: {
+      describe: '手动推进世界时钟 N 毫秒（时间旅行式复现）',
+      args: [{ key: 'Ms', label: '毫秒', type: 'number', required: true }],
+      handler: async (ctx, a, s) => {
+        if (!Number.isFinite(a.Ms)) return fail(invalid('ms must be a finite number'))
+        const snap = ctx.world.clock.advance(a.Ms)
+        return ok({ ...snap, time: new Date(snap.time).toISOString() })
+      },
+    },
+    set_scale: {
+      describe: '设置世界时钟倍率（>1 快进，<1 慢放，0 停走）',
+      args: [{ key: 'Scale', label: '倍率', type: 'number', required: true }],
+      handler: async (ctx, a, s) => {
+        if (!Number.isFinite(a.Scale) || a.Scale < 0) return fail(invalid('scale must be a number >= 0'))
+        const snap = ctx.world.clock.setScale(a.Scale)
+        return ok({ ...snap, time: new Date(snap.time).toISOString() })
+      },
+    },
+    freeze: {
+      describe: '冻结/解冻世界时钟',
+      args: [{ key: 'Frozen', label: '冻结', type: 'bool' }],
+      handler: async (ctx, a, s) => {
+        const snap = ctx.world.clock.setFrozen(a.Frozen === undefined ? true : a.Frozen)
+        return ok({ ...snap, time: new Date(snap.time).toISOString() })
+      },
+    },
+    clock_status: {
+      describe: '查看世界时钟状态（offset / 推进量 / 倍率 / 冻结 / 当前时间）',
+      args: [],
+      handler: async (ctx, a, s) => {
+        const snap = ctx.world.clock.snapshot()
+        return ok({ ...snap, time: new Date(snap.time).toISOString() })
+      },
     },
     configure_run: {
       describe: '配置运行模式（monotonic / ticker）',
@@ -347,8 +476,17 @@ export const TimeAbility = {
         { key: 'IntervalMs', label: '间隔(ms)', type: 'number' },
       ],
       handler: async (ctx, a, s) => {
-        s.runMode = a.Mode || 'monotonic'
-        s.interval = a.IntervalMs || 1000
+        // 对齐主仓库 TimeCommandConfigureRun：
+        // mode 必须 monotonic/ticker；Interval ≥ 0；monotonic 必须 Interval==0；
+        // 0 < Interval < 1ms 拒绝（低于 minimumTick 的 ticker 会空转烧 CPU）
+        const mode = trimStr(a.Mode).toLowerCase() || 'monotonic'
+        if (mode !== 'monotonic' && mode !== 'ticker') return fail(invalid(`mode must be monotonic or ticker, got "${mode}"`))
+        const interval = a.IntervalMs !== undefined && a.IntervalMs !== null && a.IntervalMs !== '' ? Number(a.IntervalMs) : 1000
+        if (!Number.isFinite(interval) || interval < 0) return fail(invalid('interval must be non-negative'))
+        if (mode === 'monotonic' && interval !== 0) return fail(invalid('monotonic mode requires interval 0'))
+        if (interval > 0 && interval < 1) return fail(invalid('interval below 1ms is not allowed'))
+        s.runMode = mode
+        s.interval = interval
         return ok({ mode: s.runMode, intervalMs: s.interval })
       },
     },
@@ -374,12 +512,13 @@ export const NetMapAbility = {
         { key: 'Role', label: '角色', type: 'string' },
       ],
       handler: async (ctx, a, s) => {
-        const name = String(a.Name || '').trim()
-        const addr = String(a.Address || '').trim()
-        if (!name) return fail(invalid('name empty'))
+        // 对齐主仓库：name 必填且 trim 后必须等于原文（禁止前后空白）
+        const name = String(a.Name ?? '')
+        if (name.trim() === '' || name !== name.trim()) return fail(invalid('peer name must be non-empty without surrounding spaces'))
+        const addr = trimStr(a.Address)
         if (!validPeerAddress(addr)) return fail(invalid(`address "${addr}" invalid`))
         if (s.peers[name]) return fail(invalid(`peer "${name}" already exists`))
-        const peer = { name, address: addr, role: String(a.Role || '').trim(), lastSeen: Date.now() }
+        const peer = { name, address: addr, role: trimStr(a.Role), lastSeen: Date.now() }
         s.peers[name] = peer
         return ok({ ...peer, lastSeen: new Date(peer.lastSeen).toISOString() })
       },
@@ -388,7 +527,8 @@ export const NetMapAbility = {
       describe: '移除对等节点',
       args: [{ key: 'Name', label: '节点名', type: 'string', required: true }],
       handler: async (ctx, a, s) => {
-        const name = String(a.Name || '').trim()
+        const name = String(a.Name ?? '').trim()
+        if (!name) return fail(invalid('peer name must be non-empty'))
         if (!s.peers[name]) return fail(invalid(`peer "${name}" not found`))
         const prev = s.peers[name]
         delete s.peers[name]
@@ -403,14 +543,15 @@ export const NetMapAbility = {
         { key: 'NewRole', label: '新角色', type: 'string' },
       ],
       handler: async (ctx, a, s) => {
-        const name = String(a.Name || '').trim()
+        const name = String(a.Name ?? '').trim()
+        if (!name) return fail(invalid('peer name must be non-empty'))
         const peer = s.peers[name]
         if (!peer) return fail(invalid(`peer "${name}" not found`))
         if (a.NewAddress) {
           if (!validPeerAddress(String(a.NewAddress))) return fail(invalid('address invalid'))
-          peer.address = String(a.NewAddress)
+          peer.address = String(a.NewAddress).trim()
         }
-        if (a.NewRole) peer.role = String(a.NewRole)
+        if (a.NewRole) peer.role = String(a.NewRole).trim()
         peer.lastSeen = Date.now()
         return ok({ ...peer, lastSeen: new Date(peer.lastSeen).toISOString() })
       },
@@ -430,8 +571,10 @@ export const NetMapAbility = {
         { key: 'Address', label: '地址', type: 'string' },
       ],
       handler: async (ctx, a, s) => {
-        const name = String(a.Name || '').trim()
-        const addr = String(a.Address || '').trim()
+        const name = trimStr(a.Name)
+        const addr = trimStr(a.Address)
+        // 对齐主仓库 lookup_peer：name 与 addr 至少要有一个非空
+        if (!name && !addr) return fail(invalid('name or address required'))
         if (name) {
           const p = s.peers[name]
           if (p) return ok({ ...p, lastSeen: new Date(p.lastSeen).toISOString() })
@@ -518,17 +661,21 @@ export const OneKeyAbility = {
       handler: async (ctx, a, s) => {
         const kr = ctx.node.data.KeyringData
         const now = Date.now()
-        if (a.ExpiresAt <= a.IssuedAt || a.ExpiresAt <= now || a.IssuedAt > now + 60 * 1000) {
+        const subject = trimStr(a.Subject)
+        // 对齐主仓库 verify_token：subject/signature 显式非空，时间窗 IssuedAt<ExpiresAt≤now≤IssuedAt+60s
+        if (!subject) return fail(invalid('subject empty'))
+        if (String(a.Signature ?? '') === '') return fail(invalid('signature empty'))
+        if (!(a.ExpiresAt > a.IssuedAt) || a.ExpiresAt <= now || a.IssuedAt > now + 60 * 1000) {
           return fail(invalid('invalid token lifetime'))
         }
-        const tok = kr.tokens[String(a.Subject).trim()]
+        const tok = kr.tokens[subject]
         if (!tok) return fail(invalid('unknown subject'))
         if (tok.revoked) return fail(invalid('token revoked'))
         const payload = `${tok.subject}|${tok.issuedAt}|${tok.expiresAt}`
         const want = await hmacSignBase64Url(strToBytes(kr.secret), payload)
         if (want !== a.Signature) return fail(invalid('bad signature'))
         if (tok.issuedAt !== a.IssuedAt || tok.expiresAt !== a.ExpiresAt) return fail(invalid('token mismatch'))
-        return ok(String(a.Subject).trim())
+        return ok(subject)
       },
     },
     revoke_token: {
