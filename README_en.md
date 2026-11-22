@@ -7,8 +7,52 @@
 ### 1. Introduction
 
 - FasterEdge Simulator is an **offline simulation, orchestration, and testing tool** in the FasterEdge ecosystem. Opening the page takes you directly to a canvas with no login or backend. Like a network-topology tool, it lets you drag in nodes, connect them, mount Data / Ability components on each node, execute commands, and run offline test scenarios.
-- It follows the command model of the main [FasterEdge](https://github.com/FasterEdge/FasterEdge) repository: a node is an **Atom**, Data components are its roots, and Ability components are its branches. All interactions use `Command(node, component, act, args) -> CommandOutput{Name, Value, Err}`. **The alignment is machine-verifiable and has a boundary**: component and command names are fully aligned (31 components / 226 commands, `missingCommand` = 0), but the **parameter schemas are not** — 210 parameter-name/set differences, 17 simulator-only commands, and 6 nested-argument-struct differences are listed one by one in the contract diff in section 9. Do not read this as "the parameters correspond one to one" as well.
+- It follows the command model of the main [FasterEdge](https://github.com/FasterEdge/FasterEdge) repository: a node is an **Atom**, Data components are its roots, and Ability components are its branches. All interactions use `Command(node, component, act, args) -> CommandOutput{Name, Value, Err}`. **The alignment is machine-verifiable and has a boundary**: component and command names are fully aligned (31 components / 226 commands on the Go side, `missingCommand` = 0), but the **parameter schemas are not** — 210 parameter-name/set differences, 17 simulator-only commands, and 6 nested-argument-struct differences are listed one by one in the contract diff in section 9. Do not read this as "the parameters correspond one to one" as well.
+  Keep the two counts separate: **31 components / 226 commands on the Go side** (`contract.json`) versus **31 components / 243 commands in the Simulator registry** (`src/core/registry/*.js`, which is exactly what `node tools/contract/compare.mjs` reads). The extra 17 are the `extraCommand` set from section 9: the world clock (`TimeAbility.set_offset/advance/set_scale/freeze/clock_status`), MQTT QoS/retain observability (`puback/pubrec/pubcomp/redeliver/inflight/retained/stats`), topology reachability (`FileTransferAbility.check_link`), and `get_job`/`clear_finished` on Cmd/Sh/Bash. 226 + 17 = 243, item for item.
 - All simulation logic—including the world, MQTT broker, simulated clock, virtual file systems, and command dispatch—runs in the browser. Data is automatically saved to `localStorage`, and JSON import and export support repeated offline orchestration and testing.
+
+#### Directory Tree and the Role of Each New File
+
+```
+Simulator/
+├── index.html                Vite entry HTML
+├── vite.config.js            Vite config (Vue plugin + dev server on port 5173)
+├── package.json / package-lock.json   dependencies and scripts (npm run test / build)
+├── smoke.mjs                 engine smoke assertions (232 items, no DOM needed)
+├── contract.json             command contract statically extracted from the main repo's Go source (31 components / 226 commands)
+├── contract-baseline.json    contract-diff baseline (233 items, guarded by node --test)
+├── src/
+│   ├── main.js / App.vue / store.js / styles.css   Vue app shell and global state
+│   ├── components/           8 Vue components: canvas, node, right inspector, test tab, …
+│   └── core/
+│       ├── engine.js         Command(node, component, act, args) dispatch + argument validation
+│       ├── world.js          world state (nodes, links, logs, Broker, clock) in a Vue reactive container
+│       ├── registry/         commands export and handlers for the 31 Data/Ability components
+│       ├── clock.js          simulated clock (advance / set_scale / freeze / offset)
+│       ├── netpolicy.js      address-policy grading, aligned with the main repo's address_policy.go
+│       ├── trace.js          command-trace recording/replay and the deterministic environment (withDeterminism)
+│       ├── testrunner.js     scenario DSL (multi-step assertions) and the bundled sample scenarios
+│       ├── persistence.js    world serialize/hydrate and example topology construction
+│       ├── crypto.js         HMAC-SHA256 / SHA-256 wrappers (used by OneKey / Keyring)
+│       └── errors.js         unified error construction (invalid command arguments, …)
+├── test/                     node:test assertions (contract-diff gatekeeping + trace replay, 23 items)
+├── tools/contract/compare.mjs  contract comparer (registry ↔ contract.json schema-level diff)
+├── scripts/trace.mjs         trace CLI (record / replay / selftest)
+└── docs/parity.md            per-component validation cross-reference + structural difference list
+```
+
+The eight files added or completed in this work, and what each is for:
+
+| File | Role | Guarded by |
+|---|---|---|
+| `src/core/netpolicy.js` | the repository's single address-decision entry point: IP-literal classification, `isDialableHost` (level-aware), `splitHostPort`, `isAcceptableHostname` (loopback aliases + ambiguous numeric hosts) | `smoke.mjs` group 30.14 |
+| `src/core/clock.js` | the simulated clock: maps system time onto a time that can advance / fast-forward / freeze; `TimeAbility` and every engine timestamp read it | `smoke.mjs` clock group + `test/trace.test.mjs` |
+| `src/core/trace.js` | command-trace recording/replay and the deterministic environment: a fixed clock plus a seeded `getRandomValues`; handlers execute for real, nothing is mocked | `test/trace.test.mjs` (23 items) |
+| `scripts/trace.mjs` | the trace CLI: `record` / `replay` / `selftest`; exit code 1 means replay diverged | the end-to-end step in `.github/workflows/test.yml` |
+| `tools/contract/compare.mjs` | the contract comparer: reads the registry's real exports and `contract.json` and emits the five diff kinds with counts | `test/contract.test.mjs` |
+| `contract.json` | the static extraction of the main repo's Go source (`cmd/contract`): components, commands, argument JSON tags, three-valued requiredness | `test/contract.test.mjs` |
+| `contract-baseline.json` | the diff baseline: `byKind` counts and `total`; adding or removing any command or argument on either side turns `node --test` red | `test/contract.test.mjs` |
+| `docs/parity.md` | the per-component validation cross-reference plus 12 structural differences, spelling out "what is deliberately inconsistent" | maintained by hand, keywords aligned with `smoke.mjs` group 30 |
 
 ### 2. Terminology
 
@@ -44,7 +88,7 @@ The tool implements a component registry with the same names as the main reposit
 |------|----------|--------------|
 | `BaseData` | Framework metadata (logo and version) | `logo` / `info` |
 | `NetMapData` | Local node network topology (node name, interfaces, and default egress interface) | `info` / `set_node_name` / `interfaces` / `set_default_iface` |
-| `KeyringData` | Shared secrets and token table | `status` / `set_secret` / `rotate` / `issue_token` / `revoke_*` |
+| `KeyringData` | Shared secrets and token table | `status` / `set_secret` / `rotate` / `issue_token` / `list_tokens` / `revoke_token` / `revoke_all` |
 | `ConfigData` | Flat dotted-path KV configuration | `get` / `set` / `delete` / `list` / `snapshot` |
 | `MySQLData` / `PostgreSQLData` | Relational database public connection parameters and independent passwords | `configure` / `set_secret` / `clear_secret` / `get_config` / `status` / `snapshot` |
 | `SQLiteData` | SQLite file, schema, WAL, timeout, and connection-pool parameters | `configure` / `get_config` / `status` / `snapshot` |
@@ -60,25 +104,29 @@ Database passwords and tokens are kept only in the private memory of the Data co
 |------|----------|-------------------|
 | `BaseAbility` | Basic | `list_data_names` / `list_ability_names` |
 | `RoleAbility` | Basic | `describe` / `set_role` / `get_role` |
-| `TimeAbility` | Basic | `sync_manual` / `sync_system` / `sync_net` / `sync_ntp` / `get_time` / `set_offset` / `advance` / `set_scale` / `freeze` / `clock_status` / `configure_run` |
+| `TimeAbility` | Basic | `sync_manual` / `sync_system` / `sync_net` / `sync_ntp` / `get_time` / `last` / `set_offset` / `advance` / `set_scale` / `freeze` / `clock_status` / `configure_run` |
 | `NetMapAbility` | Basic | `register_peer` / `unregister_peer` / `update_peer` / `list_peers` / `lookup_peer` / `get_topology` |
 | `OneKeyAbility` | Basic | `issue_token` / `verify_token` / `revoke_token` / `revoke_all` / `list_tokens` / `status` / `rotate` (HMAC-SHA256) |
 | `CloudRoleAbility` | Basic | `describe` / `set_controller` / `get_controller` / `register_service` / `unregister_service` / `list_services` / `set_status` / `get_status` / `heartbeat` (all commands require `role=cloud`) |
 | `EdgeRoleAbility` | Basic | `describe` / `set_zone` / `get_zone` / `add_capability` / `remove_capability` / `list_capabilities` / `set_capabilities` / `record_latency` / `get_metrics` / `set_online` (all commands require `role=edge`) |
-| `CmdAbility` | Terminal | `run` / `start` / `wait` / `kill` / `list` / `set_allowlist` / `clear_finished` (an empty allowlist denies all commands; common commands are allowed by default) |
-| `ShAbility` | Terminal | `run` / `start` / `wait` / `kill` / `list` / `set_allowlist` (based on CmdAbility using `sh -c`) |
-| `BashAbility` | Terminal | `run` / `start` / `wait` / `kill` / `list` / `set_allowlist` (based on ShAbility using `bash --noprofile --norc -c`) |
-| `ConfigFileAbility` | File / Configuration | `set_path` / `load` / `save` / `exists` (ConfigData-based JSON persistence) |
-| `FileTransferAbility` | File / Configuration | `set_target` / `upload` / `download` / `check_link` / `list` / `get_transfer` / `cancel` (pluggable Transport, topology-connectivity gated) |
-| `AlgorithmDistributionAbility` | File / Configuration | `register_algorithm` / `unregister_algorithm` / `distribute` / `list_distributions` / `cancel` (based on FileTransfer) |
-| `ModbusAbility` | Industrial protocols | `set_endpoint` / `set_unit_id` / `read_holding` / `read_input` / `read_coils` / `read_discrete` / `write_*` (pluggable) |
-| `SerialAbility` | Industrial protocols | `open` / `close` / `read` / `write` / `set_config` / `list_ports` (pluggable Transport) |
-| `TSNAbility` | Industrial protocols | `set_interface` / `register_talker` / `register_listener` / `unregister` / `set_priority_map` / `set_time_aware` |
-| `MQTTAbility` | Data exchange | `set_broker` / `connect` / `disconnect` / `publish` / `subscribe` / `drain` / `list_subscriptions` / `inflight` / `puback` / `pubrec` / `pubcomp` / `redeliver` / `retained` / `stats` (cross-node routing through the world Broker with `+` / `#`, retained messages, and QoS 0/1/2) |
-| `InfluxDBAbility` | Data exchange | `set_endpoint` / `set_token` / `set_org` / `set_bucket` / `ping` / `write` / `query` / `list_series` / `delete_series` |
-| `EKuiperAbility` | Data exchange | `set_endpoint` / `create_stream` / `drop_stream` / `create_rule` / `start_rule` / `stop_rule` / `show_rules` |
-| `DockerAbility` | Container orchestration | `set_endpoint` / `list_containers` / `start/stop/restart/remove` / `pull_image` / `inspect` / `get_logs` / `create` |
-| `KubernetesAbility` | Container orchestration | `set_context` / `apply` / `delete` / `list` / `get` / `scale` / `get_logs` |
+| `CmdAbility` | Terminal | `run` / `start` / `wait` / `kill` / `list` / `get_job` / `clear_finished` / `set_allowlist` / `get_allowlist` / `set_allowlist_any` (an empty allowlist denies all commands; common commands are allowed by default, and `set_allowlist_any` is the only opt-in for allowing everything) |
+| `ShAbility` | Terminal | `run` / `start` / `wait` / `kill` / `list` / `get_job` / `clear_finished` / `set_allowlist` / `get_allowlist` / `set_allowlist_any` (based on CmdAbility using `sh -c`) |
+| `BashAbility` | Terminal | `run` / `start` / `wait` / `kill` / `list` / `get_job` / `clear_finished` / `set_allowlist` / `get_allowlist` / `set_allowlist_any` (based on ShAbility using `bash --noprofile --norc -c`) |
+| `ConfigFileAbility` | File / Configuration | `set_path` / `get_path` / `load` / `save` / `exists` (ConfigData-based JSON persistence) |
+| `FileTransferAbility` | File / Configuration | `set_target` / `get_target` / `upload` / `download` / `check_link` / `list` / `get_transfer` / `clear_finished` / `cancel` (pluggable Transport, topology-connectivity gated) |
+| `AlgorithmDistributionAbility` | File / Configuration | `register_algorithm` / `unregister_algorithm` / `get_algorithm` / `list_algorithms` / `distribute` / `list_distributions` / `clear_finished` / `cancel` (based on FileTransfer) |
+| `ModbusAbility` | Industrial protocols | `set_endpoint` / `get_endpoint` / `set_unit_id` / `get_unit_id` / `read_holding` / `read_input` / `read_coils` / `read_discrete` / `write_coil` / `write_holding` / `write_holding_multi` (pluggable) |
+| `SerialAbility` | Industrial protocols | `open` / `is_open` / `close` / `read` / `write` / `set_config` / `get_config` / `list_ports` (pluggable Transport) |
+| `TSNAbility` | Industrial protocols | `set_interface` / `get_interface` / `register_talker` / `register_listener` / `unregister` / `list_streams` / `set_priority_map` / `get_priority_map` / `set_time_aware` / `get_time_aware` |
+| `MQTTAbility` | Data exchange | `set_broker` / `get_broker` / `set_client_id` / `set_credentials` / `connect` / `is_connected` / `disconnect` / `subscribe` / `unsubscribe` / `list_subscriptions` / `publish` / `drain` / `puback` / `pubrec` / `pubcomp` / `redeliver` / `inflight` / `retained` / `stats` (cross-node routing through the world Broker with `+` / `#`, retained messages, and QoS 0/1/2) |
+| `InfluxDBAbility` | Data exchange | `set_endpoint` / `get_endpoint` / `set_token` / `set_org` / `set_bucket` / `get_config` / `ping` / `write` / `query` / `list_series` / `delete_series` |
+| `EKuiperAbility` | Data exchange | `set_endpoint` / `get_endpoint` / `create_stream` / `get_stream` / `list_streams` / `drop_stream` / `create_rule` / `get_rule_status` / `drop_rule` / `start_rule` / `stop_rule` / `show_rules` |
+| `DockerAbility` | Container orchestration | `set_endpoint` / `get_endpoint` / `list_containers` / `create_container` / `start_container` / `stop_container` / `restart_container` / `remove_container` / `inspect_container` / `pull_image` / `get_logs` |
+| `KubernetesAbility` | Container orchestration | `set_context` / `get_context` / `apply` / `delete` / `list` / `get` / `scale` / `get_logs` |
+
+The command names above are taken one by one from the `commands` export of `src/core/registry/*.js` (31 components / 243 commands — the same object section 9's `node tools/contract/compare.mjs` reads). The machine-checkable version is the diff in section 9; this table is a human-readable summary.
+
+One measured note on the Cmd/Sh/Bash job commands: all three export the identical set, `run`/`start`/`wait`/`kill`/`list`/`get_job`/`clear_finished`/`set_allowlist`/`get_allowlist`/`set_allowlist_any` (they share `makeCmdAbility` in `src/core/registry/ability-terminal.js`, reproducible with `node smoke.mjs`). They still appear one by one in section 9's `extraCommand` because of the **main repository** side: `ability/sh_ability.go:365-374` (`shAbilityCommands`) and `ability/bash_ability.go:197-206` (`bashAbilityCommands`) forward only `wait`/`kill`/`list`, and the comment states plainly that "CmdAbility's get_job / clear_finished are not forwarded — therefore ListCommands must not contain these two parent commands. Reporting them would make Atom.CommandNames export a catalogue that cannot be invoked." So all three simulator components expose two commands more than Go, which is the simulator going beyond the main repository rather than missing anything (`missingCommand` is 0).
 
 Three semantics boundaries of the simulated transports (differences from the real drivers in the main repository, each reproducible with `node smoke.mjs`):
 
@@ -112,20 +160,42 @@ const inbox = (await runCommand(world, edge.id, 'MQTTAbility', 'drain', {})).Val
 - Follow the Strategy, Command, and Composite patterns.
 - All command arguments use strict types. Missing required arguments or type mismatches return `invalid command arguments`.
 - Data and Ability dependencies are checked before command dispatch. Missing dependencies return explicit errors, and RoleAbility provides role gating for Cloud and Edge capabilities.
-- Ability components that involve external networks reject `localhost`, `127.0.0.1`, `0.0.0.0`, and `::1` by default to reduce SSRF risk, including TimeAbility and SerialAbility.
+- Ability components that involve external networks reject `localhost`, `127.0.0.1`, `0.0.0.0`, and `::1` by default to reduce SSRF risk, including TimeAbility, MQTTAbility, and NetMapAbility.
+
+#### Address Policy Grading
+
+`src/core/netpolicy.js` is the simulator's **single** address-decision entry point (`ability-core.js` / `ability-external.js` / `ability-industrial.js` / `data.js` all import from it), aligned with `CheckAddr` / `CheckHost` in the main repo's `ability/address_policy.go`. There the caller picks the level explicitly; here the simulator always uses `allowPrivate: true`:
+
+| Address class | Main repo (any level) | Main repo `PublicOnly` | Main repo `AllowPrivate` / `AllowLoopback` | Simulator (`allowPrivate: true`) |
+|---|---|---|---|---|
+| Loopback `127/8`, `::1` | reject | reject | allowed from `AllowLoopback` | reject (see `docs/parity.md` structural difference) |
+| Unspecified `0.0.0.0`, `::` | reject | reject | reject | reject |
+| Multicast `224/4`, `ff00::/8` | reject | reject | reject | reject |
+| Link-local `169.254/16`, `fe80::/10` | reject | reject | reject | reject |
+| **Limited broadcast `255.255.255.255/32`** | **reject** | reject | reject | **reject** |
+| RFC1918 `10/8`, `172.16/12`, `192.168/16`, ULA `fc00::/7` | allow | reject | allow | allow |
+| Reserved/documentation ranges `192.0.2/24`, `198.51.100/24`, `203.0.113/24`, `198.18/15`, `100.64/10`, `192.0.0/24`, `192.88.99/24`, `240/4` | allow | reject | allow | allow |
+| Publicly routable | allow | allow | allow | allow |
+
+Three points worth noting:
+
+- **Limited broadcast is not private space.** `255.255.255.255` goes through `isAlwaysRejectedAddr` in the main repo (`ability/address_policy.go:78-83`) and is rejected at every level; the simulator gives it its own `broadcast` branch in `ipKind()`, decided before `private`, so the tightened level never lets it through either.
+- **`localhost` / `*.localhost` aliases and ambiguous numeric hosts** (`127.1`, `0x7f.0.0.1`, `2130706433`, `0177.0.0.1`) are rejected on both sides—those spellings resolve differently on Windows and glibc, so they are treated as unauditable addresses.
+- **The tightened path is available**: `isDialableHost(host, { allowPrivate: false })` is the equivalent of `AddressPolicyPublicOnly`, and `node smoke.mjs` group 30.14 asserts, one by one, that `255.255.255.255`, `240.0.0.1`, `198.18.0.1`, `198.19.255.255`, `192.0.2.5`, and `100.64.0.1` are all rejected once tightened.
 
 ### 6. Offline Testing
 
 The right-side "✅ Test" tab supports multi-step scenarios. Each step specifies a node, component, command, JSON arguments, and assertions: expected success or failure, Value contains or equals, and Err contains. After execution, each step is marked PASS or FAIL and a complete command log remains in the console. Three sample scenarios are included: cross-node MQTT subscribe/publish, OneKey token issuance and verification, and ConfigData read/write with ConfigFile persistence.
 
-The core engine consists of plain JavaScript modules in `src/core/` and does not depend on Vue, so it can be tested directly outside the browser:
+The core engine consists of plain JavaScript modules in `src/core/` and can be tested directly outside the browser; the only Vue dependency inside the engine is `src/core/world.js:6`, `import { reactive, markRaw } from 'vue'` (world state lives in a Vue reactive container so the canvas repaints automatically). Every other module—engine, registry, trace, testrunner, clock, netpolicy, persistence—is dependency-free plain JS:
 
 ```bash
-npm run test          # One command: smoke.mjs (122 assertions) + test/ (20 node:test assertions)
-node smoke.mjs        # 122 engine assertions: dispatch, dependencies, tokens, MQTT routing with
+npm run test          # One command: smoke.mjs (232 assertions) + test/ (23 node:test assertions)
+node smoke.mjs        # 232 engine assertions: dispatch, dependencies, tokens, MQTT routing with
                       # retained messages and QoS 0/1/2, the simulated clock, topology
-                      # connectivity, configuration persistence, test assertions, and serialization
-node --test           # 20 assertions for trace recording / replay and serialization round trips
+                      # connectivity, configuration persistence, test assertions, serialization
+                      # round trips, and address-policy grading
+node --test           # 23 assertions for trace recording / replay and serialization round trips
 ```
 
 ### 7. Command Trace Recording and Replay
@@ -149,10 +219,10 @@ Replay differences are reported with exact paths, for example `[step#0] out.Valu
 
 ```bash
 npm run test          # All offline tests green (smoke.mjs + node --test)
-npm run build         # Production build with Vite 7, Vue 3, and Vue Flow
+npm run build         # Production build with Vite 8, Vue 3, and Vue Flow
 ```
 
-Current coverage: **122 passing assertions covering engine command dispatch, dependency checks, argument validation, OneKey HMAC tokens, cross-node MQTT routing (including retained delivery and the QoS 0/1/2 two-phase acknowledgement and de-duplication flow), simulated clock advance and fast-forward, FileTransfer topology connectivity gating, ConfigFile persistence, role gating, test assertions, and serialization / deserialization round trips; plus 20 assertions for trace recording / replay and state round trips (command logs and end state byte-identical after record → JSON → replay, tampering always detected, and round-trip equivalence for links, Broker runtime state, and clock snapshots); the production build completes without errors.** CI lives in `.github/workflows/test.yml`.
+Current coverage: **232 passing assertions covering engine command dispatch, dependency checks, argument validation, OneKey HMAC tokens, cross-node MQTT routing (including retained delivery and the QoS 0/1/2 two-phase acknowledgement and de-duplication flow), simulated clock advance and fast-forward, FileTransfer topology connectivity gating, ConfigFile persistence, role gating, test assertions, serialization / deserialization round trips, and address-policy grading (restricted broadcast plus reserved ranges); plus 23 assertions for trace recording / replay and state round trips (command logs and end state byte-identical after record → JSON → replay, tampering always detected, and round-trip equivalence for links, Broker runtime state, and clock snapshots); the production build completes without errors.** CI lives in `.github/workflows/test.yml`.
 
 ### 9. Command-Contract Diff Against the Main Repository
 
@@ -170,11 +240,12 @@ The extractor reads the `switch act` branches of every component's `Command()` i
 
 The comparer reports five kinds of difference: `missingCommand` (present in Go, absent here), `extraCommand` (invented here), `argNameDiff` (parameter names differ), `requiredDiff` (requiredness differs), and `shapeDiff` (Go nests its argument struct while the simulator passes flat arguments). The baseline lives in `contract-baseline.json` and is guarded by `node --test`: **adding or removing a command or parameter on either side turns the test red**, forcing a human to inspect the diff and then either fix the code or update the baseline, with no silent drift.
 
-Current baseline (`contract.json` at schemaVersion 1): 31 components / 226 commands / 198 command constants on the Go side; 233 differences = `missingCommand` 0 + `extraCommand` 17 + `argNameDiff` 210 + `requiredDiff` 0 + `shapeDiff` 6.
+Current baseline (`contract.json` at schemaVersion 1): 31 components / 226 commands / 198 command constants on the Go side; 233 differences = `missingCommand` 0 + `extraCommand` 17 + `argNameDiff` 210 + `requiredDiff` 0 + `shapeDiff` 6. The same registry holds 31 components / 243 commands on the Simulator side, and 226 + 17 = 243 matches the `extraCommand` count item for item.
 
 Those 233 are **real, known inconsistencies**, in two groups, and none of them is fixed yet:
 
-- `extraCommand` (17): extra commands the simulator offers for the world clock (`TimeAbility.set_offset/advance/set_scale/freeze/clock_status`), MQTT QoS/retain observability (`puback/pubrec/pubcomp/redeliver/inflight/retained/stats`), topology reachability (`FileTransferAbility.check_link`), and `get_job`/`clear_finished` on Sh/Bash. These **go beyond the main repository** and are documented above as "semantics boundaries of the simulated transports" rather than passed off as main-repository commands.
+- `extraCommand` (17): extra commands the simulator offers for the world clock (`TimeAbility.set_offset/advance/set_scale/freeze/clock_status`), MQTT QoS/retain observability (`puback/pubrec/pubcomp/redeliver/inflight/retained/stats`), topology reachability (`FileTransferAbility.check_link`), and `get_job`/`clear_finished` on Cmd/Sh/Bash. These **go beyond the main repository** and are documented above as "semantics boundaries of the simulated transports" rather than passed off as main-repository commands.
+  For `get_job`/`clear_finished` the difference is in the **exposed surface**, not the implementation: the simulator shares one command table across all three (`makeCmdAbility` in `src/core/registry/ability-terminal.js`), whereas the main repo's `shAbilityCommands` (`ability/sh_ability.go:365-374`) and `bashAbilityCommands` (`ability/bash_ability.go:197-206`) forward only `wait`/`kill`/`list`, with a comment stating plainly that "CmdAbility's get_job / clear_finished are not forwarded — therefore ListCommands must not contain these two parent commands. Reporting them would make Atom.CommandNames export a catalogue that cannot be invoked." So all three simulator components expose two more callable commands than Go. The direction is the opposite of a gap: `missingCommand` is 0.
 - `argNameDiff` (210): the main repository names parameters differently (`IDOrName/JobID/Address/Quantity` versus `Id/Start/Count`) or supports parameters the simulator does not expose (`Timeout/Env/Scope/Nonce`, and others). **This is the "fully aligned command model" that has not been delivered**: what aligns today is the command *names*, not the parameter schemas.
 
 `requiredDiff` is 0 only because the main repository almost never records requiredness (Go has no tag for it); static analysis can only spot the 10 places that reject an empty value explicitly. That metric's reliability is limited by this, so it must not be cited as evidence that argument validation is equivalent.

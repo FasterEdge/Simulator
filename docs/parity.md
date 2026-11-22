@@ -3,13 +3,22 @@
 本文件记录 `Simulator/`（纯前端 JS 模拟器）与主仓库 `FasterEdge/ability/*.go`、
 `FasterEdge/data/*.go` 之间**参数校验**的对应关系，以及刻意保留或无法模拟的残余差异。
 
+**本表与 README 第九节的 233 项 schema 差分是两套正交清单，不要混算**：第九节差分
+（`tools/contract/compare.mjs`）比对的是**命令名与参数名**是否逐条对应，回答"两边的
+接口面差在哪"；本表比对的是**同一条命令拿到同一个参数值时，校验结论是否一致**，回答
+"同样的输入会不会一方收一方拒"。一个命令可以同时出现在两套清单里（例如
+`ModbusAbility.read_holding`：本表关注 `quantity` 1..125 是否对齐，第九节关注 Go 侧
+叫 `Quantity` 而 Simulator 叫 `Count`），两侧数字不可相加，也不存在"还剩多少差异"的
+单一答案。答辩时被问到"到底还剩多少差异"，正确回答是分别引用：命令名/参数名 233 项
+（README 第九节），同值校验结论的刻意差异 12 条（本表第三节）。
+
 - 对照基准：主仓库 `ability/address_policy.go`（`CheckAddr` / `CheckHost` 三级策略）、
   各 `*_ability.go` 的 `Command` 分支与 `data/database_data.go` 的 `validate*` 函数。
-  未读取 README 作为依据——README 与代码在本次工作中即存在不一致。
+  本文件只引用 Go 源码与 Simulator 源码作为依据，不引用任何一侧的 README。
 - 原则：**凡主仓库拒绝的，Simulator 一律拒绝**；主仓库放行的私网地址，Simulator
-  因示例拓扑全在 `10.0.0.0/8` 而放行（见"结构性差异"第 12 条）。
-- 回归保障：`smoke.mjs` 第 30 组（"参数契约对齐（C3）"）用 87 条负面断言逐条钉住
-  本表所列校验，错误关键词与实现文案一致。
+  因示例拓扑全在 `10.0.0.0/8` 而放行（见"结构性差异"第 10 条）。
+- 回归保障：`smoke.mjs` 第 30 组（"参数契约对齐（C3）"）逐条钉住本表所列校验，
+  错误关键词与实现文案一致；新增的保留段/受限广播断言在第 30.14 组。
 
 ---
 
@@ -18,9 +27,10 @@
 | 能力 | 主仓库 | Simulator |
 | --- | --- | --- |
 | IPv4/IPv6 字面量分类 | `CheckAddr` 先 `Unmap()` 再判 `isAlwaysRejectedAddr` | `ipKind()` 先把 `::ffff:127.0.0.1` 归一化为 IPv4 再判类别 |
-| 一律拒绝 | 未指定（`0.0.0.0`/`::`）、组播、链路本地（`169.254/16`、`fe80::/10`）、`255.255.255.255` | 同（`loopback`/`unspecified`/`multicast`/`linklocal`） |
+| 一律拒绝 | 未指定（`0.0.0.0`/`::`）、组播、链路本地（`169.254/16`、`fe80::/10`）、受限广播 `255.255.255.255` | 同（`loopback`/`unspecified`/`multicast`/`linklocal`/`broadcast`） |
+| 非公网可路由保留段 | `isSpecialUseAddr`：`100.64/10`、`192.0.0/24`、`192.0.2/24`、`198.18/15`、`198.51.100/24`、`203.0.113/24`、`192.88.99/24`、`240/4`、IPv6 侧 `2001:db8::/32` | 同集合（`ipKind()` 归入 `private`），随 `allowPrivate` 收放 |
 | 回环 | 仅 `AddressPolicyAllowLoopback` 等级放行 | 一律拒绝（`allowPrivate` 不影响回环） |
-| 私网 | 由调用方显式选等级：`PublicOnly` 拒私网 | **放行**（`allowPrivate: true`），见结构性差异 12 |
+| 私网 | 由调用方显式选等级：`PublicOnly` 拒私网 | **放行**（`allowPrivate: true`），见结构性差异 10 |
 | 主机名 | `CheckHost` 拒 `localhost` / `*.localhost`，拒 `isLegacyNumericHost` | `isAcceptableHostname()`：同两条 + 字符集白名单 |
 | 主机名字符 | 拒 `< 0x20`、`0x7f`、空格、`/`、`\`、`?`、`#`、`@` | `/^[a-zA-Z0-9._-]+$/`（更严格，白名单等价于上述黑名单） |
 | 端口 | `host:port` 两端必须可解析 | `splitHostPort()` 要求端口为 1..65535 纯数字 |
@@ -185,5 +195,16 @@ cd Simulator
 node smoke.mjs        # 必须退出码 0、输出 "🎉 全部通过"
 ```
 
-`smoke.mjs` 第 30 组"参数契约对齐（C3）"共 87 条断言，全部为负面或"归一化后取值"
-断言，无 sleep、无 mock、无恒真断言；不修改第 1–29 组既有断言。
+`smoke.mjs` 第 30 组"参数契约对齐（C3）"共 105 条断言（原 87 条 + 本次新增的 18 条），
+全部为负面或"归一化后取值"断言，无 sleep、无 mock、无恒真断言；不修改第 1–29 组
+既有断言（第 1–29 组为 127 条，全文合计 232 条）。本次新增的 18 条集中在第 30.14 组：
+对齐主仓库 `isAlwaysRejectedAddr` / `specialUseV4Prefixes`，覆盖受限广播
+`255.255.255.255` 与 `240/4`、`198.18/15`、`192.0.2/24`、`100.64/10` 等保留段在
+放行/收紧两种等级下的判定。
+
+修复的既有 bug：`ipKind()` 曾缺受限广播与保留段分支。`255.255.255.255` 被判为
+`public`（退出即放行），而主仓库 `ability/address_policy.go:78-83` 的
+`isAlwaysRejectedAddr` 对任何等级都拒——受限广播不是可建连的单播目标，放行只会把
+错误推到拨号期。修复方式是在 `ipKind()` 中把 `255.255.255.255` 单列为 `broadcast`
+（先于 `private` 判定，收紧等级也不会漏放），并把主仓库 `specialUseV4Prefixes` 的
+8 个非公网可路由段归入 `private`，随 `allowPrivate` 收放。

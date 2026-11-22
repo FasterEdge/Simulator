@@ -8,7 +8,7 @@ import { randomHex, sha256Hex } from '../crypto.js'
 import { splitHostPort, isDialableHost, isIpLiteral, isAcceptableHostname, stripBrackets } from '../netpolicy.js'
 
 // 与 package.json 保持一致（Vite 构建时可被替换，运行时读不到 json，这里显式维护）
-const VERSION = '1.0.20261116'
+const VERSION = '1.0.20261123'
 
 // 令牌 TTL 上限（对齐主仓库 data/keyring_data.go maxTokenTTL = 30 天）
 const MAX_TOKEN_TTL_MS = 30 * 24 * 3600 * 1000

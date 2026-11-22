@@ -683,5 +683,34 @@ check('NetMap 十进制回环写法被拒绝', !!out.Err && out.Err.includes('in
 out = await runCommand(pw, pEdge.id, 'NetMapAbility', 'register_peer', { Name: 'p-mapped', Address: '[::ffff:127.0.0.1]:7000' })
 check('NetMap IPv4-mapped 回环被拒绝', !!out.Err && out.Err.includes('invalid'), JSON.stringify(out).slice(0, 200))
 
+// --- 30.14 受限广播与非公网可路由保留段（对齐 isAlwaysRejectedAddr / specialUseV4Prefixes）---
+// 255.255.255.255 在主仓库 isAlwaysRejectedAddr 里，任何策略等级都拒；
+// 其余保留段在主仓库属 isSpecialUseAddr，只有 PublicOnly 等级才拒。
+for (const [addr, label] of [
+  ['255.255.255.255:7000', '受限广播'],
+  ['240.0.0.1:7000', '保留段 240/4'],
+  ['198.18.0.1:7000', '基准测试 198.18/15'],
+  ['192.0.2.5:7000', '文档保留 192.0.2/24'],
+]) {
+  out = await runCommand(pw, pEdge.id, 'NetMapAbility', 'register_peer', { Name: `p-res-${addr}`, Address: addr })
+  // 模拟器统一 allowPrivate: true，故保留段按私网放行；但受限广播必须一律拒绝
+  if (addr === '255.255.255.255:7000') {
+    check(`NetMap ${label}一律被拒绝（任何等级）`, !!out.Err && out.Err.includes('invalid'), JSON.stringify(out).slice(0, 200))
+  } else {
+    check(`NetMap ${label}按私网放行（模拟器 allowPrivate: true）`, !out.Err, JSON.stringify(out).slice(0, 200))
+  }
+}
+
+// 收紧等级下保留段必须拒绝：直接判定 netpolicy（模拟 Transport 的真实策略入口）
+const netpolicy = await import('./src/core/netpolicy.js')
+for (const addr of ['255.255.255.255', '240.0.0.1', '198.18.0.1', '198.19.255.255', '192.0.2.5', '100.64.0.1']) {
+  check(`netpolicy 收紧等级拒绝 ${addr}`, !netpolicy.isDialableHost(addr, { allowPrivate: false }), addr)
+}
+for (const addr of ['255.255.255.255', '127.0.0.1', '0.0.0.0', '169.254.169.254', '224.0.0.1', '[::ffff:127.0.0.1]']) {
+  check(`netpolicy 任何等级都拒绝 ${addr}`, !netpolicy.isDialableHost(addr, { allowPrivate: true }), addr)
+}
+check('netpolicy 公网地址在收紧等级仍放行', netpolicy.isDialableHost('8.8.8.8', { allowPrivate: false }), '8.8.8.8')
+check('netpolicy 私网地址在放行等级放行', netpolicy.isDialableHost('10.0.0.5', { allowPrivate: true }), '10.0.0.5')
+
 console.log('\n' + (failures === 0 ? '🎉 全部通过' : `❌ ${failures} 个失败`))
 process.exit(failures === 0 ? 0 : 1)
