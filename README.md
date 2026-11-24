@@ -4,6 +4,17 @@
   <h3>纯前端、零后端的 FasterEdge 离线模拟编排与测试工具</h3>
 </div>
 
+> **⚠️ 命令模型声明**
+>
+> 本工具的画布命令模型是 **Atom / Ability**，属于 FasterEdge 框架早期的模拟器。
+> 毕业设计课题采用的模型是 **Node / Component**（节点为最大编排颗粒，节点之上是
+> 能力组件，形态含 binary / container / kernel-module / driver / archive），
+> 其可视化编排实现见
+> [AIOperations/web](https://github.com/FasterEdge/AIOperations/tree/main/web)。
+>
+> **两者不是同一套体系**：本仓库的命令模型与课题采用的 Node/Component 模型不通用，
+> 本仓库的编排结果不构成课题成果。保留本仓库是为兼容早期实验数据。
+
 ### 一、项目简介
 
 - FasterEdge Simulator 是 FasterEdge 生态下的**离线模拟编排与测试工具**：打开页面即进入画布，无需登录、没有后端，像网络拓扑工具一样拖入节点、连线，并为每个节点挂载 Data / Ability 组件、执行命令、跑离线测试场景。

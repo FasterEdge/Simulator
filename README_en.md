@@ -4,6 +4,20 @@
   <h3>A Frontend-Only, Backend-Free Offline Orchestration and Testing Tool for FasterEdge</h3>
 </div>
 
+> **⚠️ Command-model notice**
+>
+> The canvas command model in this tool is **Atom / Ability**, from the early
+> FasterEdge simulator. The graduation project uses the **Node / Component**
+> model instead (a node is the largest unit of orchestration; above it sit
+> capability components of forms binary / container / kernel-module / driver /
+> archive). Its visual orchestration lives in
+> [AIOperations/web](https://github.com/FasterEdge/AIOperations/tree/main/web).
+>
+> **The two are not the same system**: this repository's command model is not
+> interchangeable with the project's Node/Component model, and orchestration
+> produced here does not constitute project output. It is kept only for
+> compatibility with early experiment data.
+
 ### 1. Introduction
 
 - FasterEdge Simulator is an **offline simulation, orchestration, and testing tool** in the FasterEdge ecosystem. Opening the page takes you directly to a canvas with no login or backend. Like a network-topology tool, it lets you drag in nodes, connect them, mount Data / Ability components on each node, execute commands, and run offline test scenarios.
